@@ -1,6 +1,6 @@
 # 拾影 VideoCatch 0.3.0
 
-Windows 10 / 11 x64 视频发现与原文件下载小程序。独立桌面窗口，可选择 Chrome / Edge 标签页（包括后台标签页）监听媒体请求，选中发现的视频后保存到本地。也可导入其他软件复制的视频直链或网页分享链接。
+Windows 10 / 11 x64 网页视频捕获与下载工具。通过 Chrome / Edge 扩展监听所选标签页（包括后台标签页）的媒体请求，提取视频地址并交给本地程序下载；也支持导入复制的视频直链或网页分享链接。
 
 [工具总入口](https://github.com/turnsolesama/portfolio) · [浏览器扩展源码](extension/) · [验证记录](TEST-REPORT.md) · [仓库迁移说明](MIGRATION.md)
 
