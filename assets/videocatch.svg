@@ -1,10 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <defs>
-    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#233d52"/><stop offset="1" stop-color="#101b2b"/></linearGradient>
-    <linearGradient id="mint" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#b8ffe4"/><stop offset="1" stop-color="#45d5b0"/></linearGradient>
-  </defs>
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#base)"/>
-  <rect x="25" y="25" width="462" height="462" rx="104" fill="none" stroke="#ffffff" stroke-opacity=".12" stroke-width="3"/>
-  <path d="M201 135Q184 125 184 145V298Q184 317 201 307L334 233Q351 224 334 214Z" fill="url(#mint)"/>
-  <path d="M126 310V346Q126 379 159 379H353Q386 379 386 346V310" fill="none" stroke="url(#mint)" stroke-width="27" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 512 512">
+    <defs><linearGradient id="base" x1="0" y1="0" x2="1" y2="1"><stop offset="0.000" stop-color="#333043"/><stop offset="0.500" stop-color="#211c30"/><stop offset="1.000" stop-color="#141624"/></linearGradient><linearGradient id="sun" x1="0" y1="0" x2="1" y2="1"><stop offset="0.000" stop-color="#ffdf9b"/><stop offset="0.500" stop-color="#ffa168"/><stop offset="1.000" stop-color="#ef626d"/></linearGradient><linearGradient id="trail" x1="0" y1="0" x2="1" y2="1"><stop offset="0.000" stop-color="#e9687a"/><stop offset="0.500" stop-color="#9559aa"/><stop offset="1.000" stop-color="#554787"/></linearGradient></defs>
+    <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#base)"/>
+    <rect x="18" y="18" width="476" height="476" rx="106" fill="none" stroke="#ffffff" stroke-opacity=".13" stroke-width="2"/>
+    
+    <circle cx="263" cy="231" r="111" fill="#070d22" opacity=".6" transform="translate(6 9)"/>
+    <circle cx="256" cy="223" r="111" fill="url(#sun)"/>
+    <path d="M110 265L405 217L390 261L94 310Z" fill="#201c30"/>
+    <path d="M115 299L386 254L371 286L100 331Z" fill="url(#trail)"/>
+    <path d="M154 342L347 310L336 334L144 366Z" fill="#b85e91"/>
+    <path d="M198 377L299 360L291 380L190 397Z" fill="#7957a8"/>
+    <path d="M175 168A99 99 0 0 1 296 131" fill="none" stroke="#fff0c7" stroke-width="3" opacity=".6" stroke-linecap="round"/>
+    </svg>

@@ -1,0 +1,57 @@
+name: VideoCatch Windows release
+on:
+  push:
+    branches: [main]
+    paths: [build.py, .github/workflows/release.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: videocatch-release
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      PYTHONUTF8: '1'
+      VIDEOCATCH_BUILD_DIR: ${{ runner.temp }}/videocatch-build
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+      - name: Install pinned build dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          if ($LASTEXITCODE) { throw 'Dependencies failed' }
+      - name: Regression tests
+        run: |
+          python -m unittest discover -s tests -v
+          if ($LASTEXITCODE) { throw 'Python tests failed' }
+          node --test tests/extension.test.cjs
+          if ($LASTEXITCODE) { throw 'Extension tests failed' }
+      - name: Build Windows and extension packages
+        run: |
+          python build.py
+          if ($LASTEXITCODE) { throw 'Build failed' }
+      - name: Verify packaged EXE and client
+        run: |
+          python scripts/verify_release.py releases/VideoCatch-v0.4.2-Windows-x64.zip --report releases/verification-v0.4.2.json
+          if ($LASTEXITCODE) { throw 'Package verification failed' }
+      - name: Keep verified artifacts for recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoCatch-v0.4.2-verified
+          path: |
+            releases/*.zip
+            releases/*.json
+          retention-days: 30
+      - name: Upload draft, download and verify, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/publish_release.py

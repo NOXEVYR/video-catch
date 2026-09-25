@@ -185,6 +185,7 @@ class Bridge(ThreadingHTTPServer):
     def __init__(self, store, port=PORT, token=None):
         self.store = store
         self.token = token or secrets.token_urlsafe(24)
+        self.ai = None
         super().__init__(("127.0.0.1", port), Handler)
 
 
@@ -224,7 +225,21 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
                 raise ValueError("无效请求")
-            if self.path == "/sync":
+            if self.path.startswith("/api/v1/"):
+                # Browser extensions can collect media, but cannot run AI file operations.
+                if origin:
+                    self.reply(403, {"error": "AI 接口仅供本机客户端调用"})
+                    return
+                if self.server.ai is None:
+                    self.reply(503, {"error": "AI 接口尚未就绪"})
+                    return
+                from ai_api import ApiError
+                try:
+                    result = self.server.ai.request(self.path.removeprefix("/api/v1/"), data)
+                except ApiError as exc:
+                    self.reply(exc.status, {"error": exc.message})
+                    return
+            elif self.path == "/sync":
                 result = self.server.store.sync(str(data.get("client", "")), data.get("name", "浏览器"), data.get("tabs", []))
             elif self.path == "/media":
                 if not isinstance(data.get("headers", {}), dict):

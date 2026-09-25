@@ -1,5 +1,6 @@
 """Reproducible inputs; self-contained local Windows distribution."""
 import hashlib
+import os
 import importlib.metadata as metadata
 import json
 from pathlib import Path
@@ -11,9 +12,9 @@ import zipfile
 import imageio_ffmpeg
 
 ROOT = Path(__file__).resolve().parent
-WORK = ROOT / ".build"
+WORK = Path(os.environ.get("VIDEOCATCH_BUILD_DIR", ROOT / ".build"))
 RELEASE = ROOT / "releases"
-VERSION = "0.3.0"
+VERSION = "0.4.2"
 DIST = RELEASE / f"VideoCatch-v{VERSION}"
 
 
@@ -33,9 +34,13 @@ def main():
                     "--collect-all", "yt_dlp", "--collect-all", "yt_dlp_ejs", "--exclude-module", "imageio_ffmpeg", "--add-binary", f"{tools / 'ffmpeg.exe'};tools", "--add-binary", f"{tools / 'deno.exe'};tools",
                     str(ROOT / "app.py")], check=True, cwd=ROOT)
     target = DIST / "VideoCatch"
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console",
+                    "--name", "VideoCatchAI", "--icon", str(ROOT / "assets" / "videocatch.ico"),
+                    "--distpath", str(target), "--workpath", str(WORK / "client"), "--specpath", str(WORK),
+                    str(ROOT / "videocatch_client.py")], check=True, cwd=ROOT)
     shutil.copytree(ROOT / "extension", target / "extension", dirs_exist_ok=True)
     shutil.copytree(ROOT / "assets", target / "assets", dirs_exist_ok=True)
-    for name in ["README.md", "使用指南.html", "TEST-REPORT.md"]:
+    for name in ["README.md", "使用指南.html", "TEST-REPORT.md", "AI接口使用说明.md", "videocatch_client.py", "SOURCE-PROVENANCE.json"]:
         shutil.copy2(ROOT / name, target / name)
     licenses = target / "licenses"
     licenses.mkdir(exist_ok=True)

@@ -1,16 +1,20 @@
-# 拾影 VideoCatch 0.3.0
+# 拾影 VideoCatch 0.4.2
+
+落日光轨主题：深紫灰与暖杏色界面，独立链接入口、浏览器来源、视频列表、空状态指引与任务状态色。应用与扩展统一采用「落日光轨」图标，增加圆角分区、功能图标和主题空状态插画。
+
+可由 AI 工具调用的本机接口：标签页监听、视频导入/下载、任务查询/取消、本地视频精确裁剪。界面勾选「启用 AI 接口」后配对客户端；手动裁剪使用「裁剪本地视频」。见 [AI 接口使用说明](AI接口使用说明.md)。接口默认关闭，只允许本机配对客户端访问。
 
 Windows 10 / 11 x64 网页视频捕获与下载工具。通过 Chrome / Edge 扩展监听所选标签页（包括后台标签页）的媒体请求，提取视频地址并交给本地程序下载；也支持导入复制的视频直链或网页分享链接。
 
-[工具总入口](https://github.com/turnsolesama/portfolio) · [浏览器扩展源码](extension/) · [验证记录](TEST-REPORT.md) · [仓库迁移说明](MIGRATION.md)
+[工具总入口](https://github.com/NOXEVYR/portfolio) · [浏览器扩展源码](extension/) · [验证记录](TEST-REPORT.md) · [仓库迁移说明](MIGRATION.md)
 
-本仓库独立维护拾影的公开源码、浏览器扩展与文档。已发布的 0.3.0 程序及扩展包继续使用原 `portfolio` Release 下载地址。
+本仓库独立维护拾影的公开源码、浏览器扩展与文档。0.4.2 程序及扩展在本仓库发布；0.3.0 历史下载仍保留在 `portfolio`。
 
 ## 下载与独立扩展
 
-- **[下载 Windows 程序 0.3.0](https://github.com/turnsolesama/portfolio/releases/download/videocatch-v0.3.0/VideoCatch-v0.3.0-Windows-x64.zip)**：完整解压，双击 `VideoCatch.exe`，保留 `_internal` 等全部文件。自带 Python、yt-dlp、FFmpeg、Deno 和 YouTube JavaScript 解析组件，无需另装运行环境。
-- **[单独下载 Chrome / Edge 扩展 0.3.0](https://github.com/turnsolesama/portfolio/releases/download/videocatch-v0.3.0/VideoCatch-Extension-v0.3.0.zip)**：独立扩展包，不需要从程序包中寻找。解压后的 `VideoCatch-extension` 是要导入浏览器的文件夹。
-- 程序与扩展需要配合使用。扩展不能独立下载；只粘贴网页链接下载时可以不安装扩展。校验信息见 [原仓库发布说明](https://github.com/turnsolesama/portfolio/blob/d3b47d7fc4320f627e6b5fc8f653fcbd35007670/video-catch/releases/README.md)。
+- **[下载 Windows 程序 0.4.2](https://github.com/NOXEVYR/video-catch/releases/download/v0.4.2/VideoCatch-v0.4.2-Windows-x64.zip)**：完整解压，双击 `VideoCatch.exe`，保留 `_internal` 等全部文件。自带 Python、yt-dlp、FFmpeg、Deno 和 YouTube JavaScript 解析组件，无需另装运行环境。
+- **[单独下载 Chrome / Edge 扩展 0.4.2](https://github.com/NOXEVYR/video-catch/releases/download/v0.4.2/VideoCatch-Extension-v0.4.2.zip)**：独立扩展包，不需要从程序包中寻找。解压后的 `VideoCatch-extension` 是要导入浏览器的文件夹。
+- 程序与扩展需要配合使用。扩展不能独立下载；只粘贴网页链接下载时可以不安装扩展。SHA-256、大小和包体验证记录见 [0.4.2 发布页](https://github.com/NOXEVYR/video-catch/releases/tag/v0.4.2)。
 
 **扩展必须单独放在固定位置；导入后不能移动或删除这个文件夹。** 推荐放在桌面「拾影浏览器扩展」或自己的固定工具目录。浏览器直接读取该目录，ZIP 可以删除，解压后的文件夹必须保留。程序包中也保留 `extension` 副本供备用。
 
@@ -26,7 +30,7 @@ Windows 10 / 11 x64 网页视频捕获与下载工具。通过 Chrome / Edge 扩
 
 ### 已经安装过旧版
 
-关闭旧桌面程序，使用新版 EXE。把新扩展文件复制到原来的固定扩展目录，覆盖同名文件，在扩展管理页点「重新加载」，检查版本为 0.3.0，再配对并刷新视频网页。若要改成新的固定目录，请先移除旧扩展再从新目录加载。不要同时加载两份拾影扩展。**桌面程序和扩展要一起更新**，旧版桥接协议无法连接新版扩展。
+关闭旧桌面程序，使用新版 EXE。把新扩展文件复制到原来的固定扩展目录，覆盖同名文件，在扩展管理页点「重新加载」，检查版本为 0.4.2，再配对并刷新视频网页。若要改成新的固定目录，请先移除旧扩展再从新目录加载。不要同时加载两份拾影扩展。**桌面程序和扩展要一起更新**，0.4.2 保持桥接协议 3，建议同步更新以获得一致的界面和版本标识。
 
 ### B 站
 
