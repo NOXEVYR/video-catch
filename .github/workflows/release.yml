@@ -15,7 +15,6 @@ jobs:
     timeout-minutes: 35
     env:
       PYTHONUTF8: '1'
-      VIDEOCATCH_BUILD_DIR: ${{ runner.temp }}/videocatch-build
     defaults:
       run:
         shell: pwsh
