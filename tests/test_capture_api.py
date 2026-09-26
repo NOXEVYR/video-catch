@@ -1,4 +1,5 @@
 import json
+import gc
 from pathlib import Path
 import queue
 import sys
@@ -62,6 +63,10 @@ class CaptureApiTests(unittest.TestCase):
         self.app.close()
         self.toolbar.stop()
         self.directory.cleanup()
+        # The patched toolbar's call history can retain App through a Mock cycle.
+        # Finalize those Tk variables/images here, never in a later HTTP worker.
+        self.app = self.root = self.toolbar = None
+        gc.collect()
 
     def wait(self, predicate):
         deadline = time.monotonic() + 8

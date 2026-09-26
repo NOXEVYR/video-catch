@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 import plistlib
 import posixpath
 import signal
+from socketserver import TCPServer
 import stat
 import subprocess
 import sys
@@ -94,6 +95,15 @@ def verify_manifest(package):
 
 def command(args, timeout=90, **kwargs):
     return subprocess.run([str(arg) for arg in args], check=True, capture_output=True, timeout=timeout, **kwargs)
+
+
+class LoopbackFixtureServer(ThreadingHTTPServer):
+    """Serve generated fixtures without a reverse-DNS dependency on CI runners."""
+    def server_bind(self):
+        if self.server_address[0] != "127.0.0.1":
+            raise ValueError("Synthetic fixture server must bind numeric IPv4 loopback")
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def _log_tail(path, limit=16000):
@@ -273,7 +283,7 @@ def native_checks(package, manifest, fixture, result, gui, diagnostics):
         def log_message(self, *_args):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(fixture)))
+    server = LoopbackFixtureServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(fixture)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     download_report = fixture / "download.json"
     try:

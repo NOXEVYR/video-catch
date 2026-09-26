@@ -1,4 +1,5 @@
 import functools
+import gc
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
@@ -67,6 +68,10 @@ class QueueTests(unittest.TestCase):
                 app.close()
                 server.shutdown()
                 server.server_close()
+                # Break fixture closure references before collecting widget cycles
+                # on the same thread that created the Tcl interpreter.
+                app = root = wait_until = None
+                gc.collect()
 
 
 if __name__ == "__main__":

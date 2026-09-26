@@ -1,4 +1,5 @@
 import functools
+import gc
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -39,6 +40,10 @@ class AiTests(unittest.TestCase):
         self.app.pending.clear()
         self.app.close()
         self.temp.cleanup()
+        # Closed widgets and callback/Mock cycles still own Tcl objects. Release
+        # the fixture and collect on Tk's thread before another worker can do it.
+        self.app = self.root = None
+        gc.collect()
 
     def wait(self, predicate, timeout=25):
         deadline = time.monotonic() + timeout

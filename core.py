@@ -9,6 +9,7 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 from urllib.parse import urlsplit
 from pages import bili_page, youtube_page, video_page, observed_formats
 
@@ -187,6 +188,12 @@ class Bridge(ThreadingHTTPServer):
         self.token = token or secrets.token_urlsafe(24)
         self.ai = None
         super().__init__(("127.0.0.1", port), Handler)
+
+    def server_bind(self):
+        # HTTPServer.server_bind calls getfqdn even for numeric loopback. Reverse
+        # DNS is unnecessary here and can block GUI startup on offline/CI hosts.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class Handler(BaseHTTPRequestHandler):

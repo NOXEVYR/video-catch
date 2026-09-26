@@ -37,6 +37,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_capture_macos.py' -v
           python -m unittest discover -s tests -p 'test_recorder.py' -v
           python -m unittest discover -s tests -p 'test_runtime_paths.py' -v
+          python -m unittest discover -s tests -p 'test_loopback_bind.py' -v
           node --test tests/extension.test.cjs
       - name: Build native application and client
         run: python build_macos.py --arch '${{ matrix.arch }}'

@@ -89,6 +89,6 @@ try:
     assert data['ok'] and 'clip' in data['actions']
 finally:
     app.close()
-result={'archive_crc':'passed','manifest_files':len(manifest['files']),'frozen_download_sha256':'passed','frozen_clip_audio_video_decode':'passed','clip_duration_seconds':times[-1],'packaged_client_http':'passed','one_click_local_pairing':'passed','credential_free_handoff':'passed','third_party_sites':'not_tested','user_visual_acceptance':'not_tested'}
+result={'archive':archive.name,'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'version':manifest['version'],'source_commit':manifest['source_commit'],'architecture':'x64','status':'passed','archive_crc':'passed','manifest_files':len(manifest['files']),'frozen_download_sha256':'passed','frozen_clip_audio_video_decode':'passed','clip_duration_seconds':times[-1],'packaged_client_http':'passed','one_click_local_pairing':'passed','credential_free_handoff':'passed','third_party_sites':'not_tested','user_visual_acceptance':'not_tested'}
 args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(result))

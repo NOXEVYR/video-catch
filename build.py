@@ -74,7 +74,8 @@ def main():
     files = {str(p.relative_to(target)).replace("\\", "/"): {"bytes": p.stat().st_size, "sha256": digest(p)}
              for p in target.rglob("*") if p.is_file() and p.name != "runtime-manifest.json"}
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    manifest = {"version": VERSION, "source_commit": source_commit, "python": sys.version.split()[0], "components": {**{p: metadata.version(p) for p in packages}, "deno": "2.9.6"}, "files": files}
+    source_dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))
+    manifest = {"version": VERSION, "source_commit": source_commit, "source_dirty": source_dirty, "python": sys.version.split()[0], "components": {**{p: metadata.version(p) for p in packages}, "deno": "2.9.6"}, "files": files}
     (target / "runtime-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     archive = RELEASE / f"VideoCatch-v{VERSION}-Windows-x64.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:

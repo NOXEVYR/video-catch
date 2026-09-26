@@ -1,4 +1,5 @@
 """Recording controls tested with synthetic devices and an inert recorder."""
+import gc
 import sys
 import threading
 import tkinter as tk
@@ -97,6 +98,12 @@ class CountdownTests(unittest.TestCase):
 
     def tearDown(self):
         self.panel.close()
+        # Some tests invoke a countdown callback directly, so also cancel its
+        # original scheduled callback before disposing of this Tcl-only root.
+        for timer in self.root.tk.call("after", "info"):
+            self.root.after_cancel(timer)
+        self.panel = self.app = self.root = None
+        gc.collect()
 
     def test_duplicate_countdown_start_and_close_cancel(self):
         self.panel.start()
@@ -170,6 +177,8 @@ class NativeWidgetTests(unittest.TestCase):
         self.toolbar.close()
         self.panel.close()
         self.root.destroy()
+        self.toolbar = self.panel = self.app = self.root = None
+        gc.collect()
 
     def test_controls_lock_and_pause_resume_state(self):
         self.app.recorder.is_busy = True
