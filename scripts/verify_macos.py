@@ -12,11 +12,13 @@ import os
 from pathlib import Path, PurePosixPath
 import plistlib
 import posixpath
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import zipfile
 
 
@@ -94,7 +96,135 @@ def command(args, timeout=90, **kwargs):
     return subprocess.run([str(arg) for arg in args], check=True, capture_output=True, timeout=timeout, **kwargs)
 
 
-def native_checks(package, manifest, fixture, result, gui):
+def _log_tail(path, limit=16000):
+    with path.open("rb") as stream:
+        stream.seek(max(0, path.stat().st_size - limit))
+        return stream.read(limit).decode("utf-8", errors="replace")
+
+
+def _stop_owned_process(process):
+    if process.poll() is not None:
+        return
+    # The probe owns this new session; terminate only its process group.
+    for sig in (signal.SIGTERM, signal.SIGKILL) if os.name == "posix" else (None, None):
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, sig)
+            elif sig is None:
+                process.kill()
+            process.wait(timeout=2)
+            return
+        except ProcessLookupError:
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def diagnosed_command(args, label, diagnostics, *, env, timeout=30, sample_after=12, cwd=None):
+    """Keep the original deadline; sample this probe before terminating it.
+
+    File-backed output avoids pipe-buffer deadlocks and survives fixture cleanup.
+    Samples inspect only the verifier's own child; no screen/device capture occurs.
+    """
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    args = [str(arg) for arg in args]
+    stdout_path, stderr_path = diagnostics / f"{label}.stdout.log", diagnostics / f"{label}.stderr.log"
+    details = dict(command=args, timeout_seconds=timeout, status="starting", sample="not_needed")
+    started = time.monotonic()
+    deadline = started + timeout
+    process = None
+    try:
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            process = subprocess.Popen(args, stdout=stdout, stderr=stderr, env=env, cwd=cwd,
+                                       start_new_session=os.name == "posix")
+            details["pid"] = process.pid
+            try:
+                process.wait(timeout=min(sample_after, timeout))
+            except subprocess.TimeoutExpired:
+                if sys.platform == "darwin" and process.poll() is None and deadline - time.monotonic() > 4:
+                    sample_file = diagnostics / f"{label}.sample.txt"
+                    with (diagnostics / f"{label}.sample-command.log").open("wb") as sample_log:
+                        try:
+                            sampled = subprocess.run(["/usr/bin/sample", str(process.pid), "3", "-file", str(sample_file)],
+                                                     stdout=sample_log, stderr=subprocess.STDOUT,
+                                                     timeout=min(7, max(.1, deadline - time.monotonic())))
+                            details["sample"] = "saved" if sampled.returncode == 0 else f"exit_{sampled.returncode}"
+                        except (OSError, subprocess.TimeoutExpired) as error:
+                            details["sample"] = str(error)
+                else:
+                    details["sample"] = "not_available"
+                process.wait(timeout=max(.01, deadline - time.monotonic()))
+            details["returncode"] = process.returncode
+            details["status"] = "passed" if process.returncode == 0 else "failed"
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, args)
+    except subprocess.TimeoutExpired:
+        details["status"] = "timed_out"
+        raise
+    except Exception as error:
+        details.update(status="failed", error=str(error))
+        raise
+    finally:
+        if process is not None:
+            _stop_owned_process(process)
+            details["returncode"] = process.returncode
+        details["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        for name, path in (("stdout", stdout_path), ("stderr", stderr_path)):
+            details[f"{name}_file"] = path.name
+            if path.exists():
+                details[f"{name}_tail"] = _log_tail(path)
+        (diagnostics / f"{label}.json").write_text(json.dumps(details, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(dict(probe=label, **details), ensure_ascii=False), flush=True)
+
+
+def diagnose_gui_failure(diagnostics, env):
+    """Bounded source controls run only after frozen smoke has already failed."""
+    source_root = Path(__file__).resolve().parents[1]
+    preamble = (
+        "import faulthandler, json, platform, sys\n"
+        "faulthandler.enable()\n"
+        "faulthandler.dump_traceback_later(10, repeat=True)\n"
+        "print(json.dumps({'python': sys.version, 'executable': sys.executable, 'platform': platform.platform(), "
+        "'machine': platform.machine()}), flush=True)\n"
+    )
+    probes = {
+        "minimal-tk": preamble + (
+            "print('stage: before tkinter import', flush=True)\n"
+            "import tkinter as tk\n"
+            "print('stage: before Tk()', flush=True)\n"
+            "root = tk.Tk()\n"
+            "print('stage: Tk created; patchlevel=' + root.tk.call('info', 'patchlevel'), flush=True)\n"
+            "root.title('VideoCatch CI minimal Tk diagnostic')\n"
+            "root.after(1200, root.destroy)\n"
+            "print('stage: before mainloop', flush=True)\n"
+            "root.mainloop()\n"
+            "faulthandler.cancel_dump_traceback_later()\n"
+            "print('stage: minimal Tk exited', flush=True)\n"
+        ),
+        "source-smoke": preamble + (
+            "import runpy\n"
+            f"sys.path.insert(0, {str(source_root)!r})\n"
+            f"sys.argv = [{str(source_root / 'app.py')!r}, '--smoke-test']\n"
+            "print('stage: before source app', flush=True)\n"
+            "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+            "faulthandler.cancel_dump_traceback_later()\n"
+            "print('stage: source smoke exited', flush=True)\n"
+        ),
+    }
+    outcomes = {}
+    for label, source in probes.items():
+        script = diagnostics / f"{label}.py"
+        script.write_text(source, encoding="utf-8")
+        try:
+            diagnosed_command([sys.executable, "-u", "-X", "faulthandler", script], label, diagnostics,
+                               env=env, timeout=30, cwd=source_root)
+            outcomes[label] = "passed"
+        except Exception as error:
+            outcomes[label] = f"failed: {error}"
+    return outcomes
+
+
+def native_checks(package, manifest, fixture, result, gui, diagnostics):
     app = package / "VideoCatch.app"
     executable = app / "Contents/MacOS/VideoCatch"
     client = package / "VideoCatchAI"
@@ -127,7 +257,16 @@ def native_checks(package, manifest, fixture, result, gui):
     isolated.mkdir()
     env = dict(os.environ, HOME=str(isolated), LOCALAPPDATA=str(isolated / "local"))
     env.pop("VIDEOCATCH_TOKEN", None)
-    command([executable, "--smoke-test"], env=env, timeout=30)
+    result["diagnostics_directory"] = diagnostics.name
+    try:
+        diagnosed_command([executable, "--smoke-test"], "frozen-smoke", diagnostics, env=env, timeout=30)
+    except Exception:
+        result["frozen_gui_smoke"] = "failed"
+        try:
+            result["gui_failure_controls"] = diagnose_gui_failure(diagnostics, env)
+        except Exception as diagnostic_error:
+            result["gui_failure_controls"] = {"diagnostic_error": str(diagnostic_error)}
+        raise  # A successful control never makes the failed frozen artifact pass.
     result["frozen_gui_smoke"] = "passed"
 
     class Quiet(SimpleHTTPRequestHandler):
@@ -168,7 +307,9 @@ def main():
     parser.add_argument("--gui", action="store_true", help="Require frozen Tk startup and synthetic download/clip on a Mac desktop session")
     parser.add_argument("--structure-only", action="store_true", help="CRC, safe extraction and manifest only; no Mach-O execution")
     parser.add_argument("--sha256", help="Expected final ZIP SHA-256 from release checksums")
+    parser.add_argument("--diagnostics", type=Path, help="Persistent directory for bounded GUI process diagnostics")
     args = parser.parse_args()
+    diagnostics = (args.diagnostics or args.report.parent / (args.report.stem + "-diagnostics")).resolve()
     if args.gui and args.structure_only:
         parser.error("--gui and --structure-only cannot be combined")
     result = {"archive": args.archive.name, "bytes": args.archive.stat().st_size, "sha256": digest(args.archive),
@@ -183,13 +324,14 @@ def main():
             package = safe_extract(args.archive, work / "extracted")
             manifest = verify_manifest(package)
             result.update(archive_crc="passed", archive_paths_links="passed", manifest_files=len(manifest["files"]),
-                          version=manifest["version"], architecture=manifest["architecture"])
+                          version=manifest["version"], architecture=manifest["architecture"],
+                          source_commit=manifest["source_commit"])
             if not args.structure_only:
                 if sys.platform != "darwin":
                     raise ValueError("Native package verification requires macOS; use --structure-only elsewhere")
                 fixture = work / "fixtures"
                 fixture.mkdir()
-                native_checks(package, manifest, fixture, result, args.gui)
+                native_checks(package, manifest, fixture, result, args.gui, diagnostics)
             result["status"] = "passed"
     except Exception as error:
         result.update(status="failed", error=str(error))

@@ -41,8 +41,20 @@ jobs:
       - name: Build native application and client
         run: python build_macos.py --arch '${{ matrix.arch }}'
       - name: Verify extracted app and synthetic download / clip
-        run: python scripts/verify_macos.py releases/VideoCatch-v0.5.0-macOS-${{ matrix.arch }}.zip --report releases/verification-v0.5.0-macOS-${{ matrix.arch }}.json --gui
+        id: verify_package
+        run: python scripts/verify_macos.py releases/VideoCatch-v0.5.0-macOS-${{ matrix.arch }}.zip --report releases/verification-v0.5.0-macOS-${{ matrix.arch }}.json --diagnostics releases/diagnostics-macOS-${{ matrix.arch }} --gui
+      - name: Preserve verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoCatch-v0.5.0-macOS-${{ matrix.arch }}-diagnostics
+          path: |
+            releases/verification-v0.5.0-macOS-${{ matrix.arch }}.json
+            releases/diagnostics-macOS-${{ matrix.arch }}/
+          if-no-files-found: warn
+          retention-days: 14
       - uses: actions/upload-artifact@v4
+        if: success() && steps.verify_package.outcome == 'success'
         with:
           name: VideoCatch-v0.5.0-macOS-${{ matrix.arch }}-verified
           path: |
