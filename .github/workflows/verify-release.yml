@@ -1,0 +1,63 @@
+name: Verify uploaded release assets
+on:
+  workflow_dispatch:
+    inputs:
+      provenance_sha256:
+        description: Expected SHA-256 of the uploaded build provenance
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download every uploaded asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download v0.5.0 --repo NOXEVYR/video-catch --dir .build/remote-release
+      - name: Verify bytes, manifests, reports and source tree
+        env:
+          EXPECTED_PROVENANCE: ${{ inputs.provenance_sha256 }}
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          from scripts.publish_release import digest, check_zip, check_report, check_source_archive, source_relationship
+          root = Path('.build/remote-release')
+          provenance = root / 'build-provenance-v0.5.0.json'
+          expected = os.environ['EXPECTED_PROVENANCE']
+          assert re.fullmatch('[0-9a-f]{64}', expected) and digest(provenance) == expected
+          data = json.loads(provenance.read_text())
+          assert data['repository'] == 'NOXEVYR/video-catch' and data['version'] == '0.5.0'
+          assert {p.name for p in root.iterdir()} == set(data['assets']) | {provenance.name}
+          for name, meta in data['assets'].items():
+              path = root / name
+              assert path.stat().st_size == meta['bytes'] and digest(path) == meta['sha256'], name
+              if path.suffix == '.zip':
+                  check_zip(path)
+          for platform, meta in data['platforms'].items():
+              path = root / meta['archive']
+              manifest = check_zip(path, 'VideoCatch', require_manifest=True)
+              assert manifest['source_dirty'] is False and manifest['source_commit'] == meta['source_commit']
+              source_relationship(meta['source_commit'], data['release_source_commit'])
+              arch = platform.removeprefix('macOS-') if platform.startswith('macOS-') else None
+              check_report(root / meta['verification'], path, manifest, data['version'], arch)
+          check_source_archive(root / data['source_archive'], data['release_source_commit'])
+          result = dict(status='passed', assets_verified=len(data['assets']) + 1, provenance_sha256=expected,
+                        release_source_commit=data['release_source_commit'], platforms=data['platforms'])
+          Path('.build/remote-verification.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoCatch-v0.5.0-remote-verification
+          path: .build/remote-verification.json
+          if-no-files-found: error
