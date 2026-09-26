@@ -237,9 +237,10 @@ def main():
     existing = gh('release', 'view', tag, '--json', 'isDraft', check=False)
     if existing.returncode == 0:
         raise RuntimeError('Release already exists; preserve it and resume by asset identity')
-    tag_ref = subprocess.run([args.gh, 'api', f'repos/{args.repo}/commits/{tag}'], capture_output=True, text=True, encoding='utf-8')
+    tag_ref = subprocess.run([args.gh, 'api', f'repos/{args.repo}/git/ref/tags/{tag}'], capture_output=True, text=True, encoding='utf-8')
     if tag_ref.returncode == 0:
-        if json.loads(tag_ref.stdout)['sha'] != commit:
+        tag_commit = subprocess.run([args.gh, 'api', f'repos/{args.repo}/commits/{tag}'], check=True, capture_output=True, text=True, encoding='utf-8')
+        if json.loads(tag_commit.stdout)['sha'] != commit:
             raise ValueError('Existing release tag points to a different source commit')
     elif '(HTTP 404)' not in tag_ref.stderr:
         raise RuntimeError('Unable to verify whether the release tag already exists: ' + tag_ref.stderr)
