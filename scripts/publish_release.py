@@ -147,16 +147,25 @@ def check_report(path, archive, manifest, version, arch=None):
 
 def check_source_archive(path, commit):
     check_zip(path, 'VideoCatch-source')
-    expected_bytes = git('archive', '--format=zip', '--prefix=VideoCatch-source/', commit).stdout
-    with zipfile.ZipFile(path) as actual, zipfile.ZipFile(io.BytesIO(expected_bytes)) as expected:
+    with zipfile.ZipFile(path) as actual:
         if actual.comment.decode('ascii') != commit:
             raise ValueError('Source ZIP Git commit comment mismatch')
         def tree(archive):
             return {item.filename: (hashlib.sha256(archive.read(item)).hexdigest(),
-                                    stat.S_IFMT(item.external_attr >> 16), bool(item.external_attr >> 16 & 0o111))
+                                    stat.S_IFMT(item.external_attr >> 16) or stat.S_IFREG,
+                                    bool(item.external_attr >> 16 & 0o111))
                     for item in archive.infolist() if not item.is_dir()}
-        if tree(actual) != tree(expected):
-            raise ValueError('Source ZIP does not match git archive of the release commit')
+        actual_tree = tree(actual)
+    # Git for Windows emits DOS ZIP metadata and may apply core.autocrlf during
+    # archive export. Check both explicit Git exports, never normalize arbitrary
+    # archive content or alter the user's Git settings.
+    for autocrlf in ('false', 'true'):
+        expected_bytes = git('-c', 'core.autocrlf=' + autocrlf, 'archive', '--format=zip',
+                             '--prefix=VideoCatch-source/', commit).stdout
+        with zipfile.ZipFile(io.BytesIO(expected_bytes)) as expected:
+            if actual_tree == tree(expected):
+                return
+    raise ValueError('Source ZIP does not match git archive of the release commit')
 
 
 def main():
