@@ -14,7 +14,7 @@ import imageio_ffmpeg
 ROOT = Path(__file__).resolve().parent
 WORK = Path(os.environ.get("VIDEOCATCH_BUILD_DIR", ROOT / ".build"))
 RELEASE = ROOT / "releases"
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 DIST = RELEASE / f"VideoCatch-v{VERSION}"
 
 
@@ -31,7 +31,7 @@ def main():
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", "VideoCatch",
                     "--icon", str(ROOT / "assets" / "videocatch.ico"), "--add-data", f"{ROOT / 'assets'};assets",
                     "--distpath", str(DIST), "--workpath", str(WORK / "pyinstaller"), "--specpath", str(WORK),
-                    "--collect-all", "yt_dlp", "--collect-all", "yt_dlp_ejs", "--exclude-module", "imageio_ffmpeg", "--add-binary", f"{tools / 'ffmpeg.exe'};tools", "--add-binary", f"{tools / 'deno.exe'};tools",
+                    "--collect-all", "yt_dlp", "--collect-all", "yt_dlp_ejs", "--collect-all", "pyaudiowpatch", "--hidden-import", "_portaudiowpatch", "--exclude-module", "imageio_ffmpeg", "--add-binary", f"{tools / 'ffmpeg.exe'};tools", "--add-binary", f"{tools / 'deno.exe'};tools",
                     str(ROOT / "app.py")], check=True, cwd=ROOT)
     target = DIST / "VideoCatch"
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console",
@@ -40,12 +40,12 @@ def main():
                     str(ROOT / "videocatch_client.py")], check=True, cwd=ROOT)
     shutil.copytree(ROOT / "extension", target / "extension", dirs_exist_ok=True)
     shutil.copytree(ROOT / "assets", target / "assets", dirs_exist_ok=True)
-    for name in ["README.md", "使用指南.html", "TEST-REPORT.md", "AI接口使用说明.md", "videocatch_client.py", "SOURCE-PROVENANCE.json"]:
+    for name in ["README.md", "使用指南.html", "TEST-REPORT.md", "AI接口使用说明.md", "videocatch_client.py", "collaboration.py", "runtime_paths.py", "SOURCE-PROVENANCE.json"]:
         shutil.copy2(ROOT / name, target / name)
     licenses = target / "licenses"
     licenses.mkdir(exist_ok=True)
     shutil.copytree(ROOT / "licenses", licenses, dirs_exist_ok=True)
-    packages = ["yt-dlp", "yt-dlp-ejs", "imageio-ffmpeg", "pyinstaller", "certifi", "requests", "urllib3", "mutagen", "brotli", "pycryptodomex", "websockets", "charset-normalizer", "idna"]
+    packages = ["yt-dlp", "yt-dlp-ejs", "imageio-ffmpeg", "pyinstaller", "PyAudioWPatch", "certifi", "requests", "urllib3", "mutagen", "brotli", "pycryptodomex", "websockets", "charset-normalizer", "idna"]
     for package in packages:
         dist = metadata.distribution(package)
         for file in dist.files or []:
@@ -61,6 +61,7 @@ def main():
         "Tcl/Tk: https://www.tcl-lang.org/ (BSD-style license; runtime license files included).\n"
         "yt-dlp: https://github.com/yt-dlp/yt-dlp (Unlicense).\n"
         "PyInstaller: https://pyinstaller.org/ (GPL with bootloader distribution exception).\n"
+        "PyAudioWPatch: https://github.com/s0d3s/PyAudioWPatch (PyAudio MIT, WPatch Apache-2.0; Windows WASAPI loopback audio).\n"
         "imageio-ffmpeg: https://github.com/imageio/imageio-ffmpeg (BSD-2-Clause).\n"
         "Deno 2.9.6: https://github.com/denoland/deno/tree/v2.9.6 (MIT).\n"
         "yt-dlp-ejs: https://github.com/yt-dlp/ejs (Unlicense).\n"
@@ -72,7 +73,8 @@ def main():
     (licenses / "FFmpeg-license.txt").write_bytes(subprocess.check_output([str(tools / "ffmpeg.exe"), "-L"], stderr=subprocess.STDOUT))
     files = {str(p.relative_to(target)).replace("\\", "/"): {"bytes": p.stat().st_size, "sha256": digest(p)}
              for p in target.rglob("*") if p.is_file() and p.name != "runtime-manifest.json"}
-    manifest = {"version": VERSION, "python": sys.version.split()[0], "components": {**{p: metadata.version(p) for p in packages}, "deno": "2.9.6"}, "files": files}
+    source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    manifest = {"version": VERSION, "source_commit": source_commit, "python": sys.version.split()[0], "components": {**{p: metadata.version(p) for p in packages}, "deno": "2.9.6"}, "files": files}
     (target / "runtime-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     archive = RELEASE / f"VideoCatch-v{VERSION}-Windows-x64.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:

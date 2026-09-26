@@ -2,6 +2,7 @@ import functools
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import queue
 import subprocess
@@ -11,6 +12,7 @@ import threading
 import time
 import tkinter as tk
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, build_opener, ProxyHandler
 
@@ -18,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import App
 from engine import ffmpeg_path
 from clipper import clip_worker
+from collaboration import collaboration_prompt, save_pairing, settings_path
 
 
 class AiTests(unittest.TestCase):
@@ -84,6 +87,78 @@ class AiTests(unittest.TestCase):
         self.assertEqual(self.post("watch", {"keys": "bad", "enabled": True})[0], 400)
         self.assertEqual(self.post("download", {"id": "missing"})[0], 404)
         self.assertEqual(self.post("capabilities")[0], 200)
+
+    def test_one_click_pairs_client_and_disable_revokes_access(self):
+        self.app.ai.enabled.clear()
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(self.folder)}), \
+                patch.object(self.root, "clipboard_clear"), \
+                patch.object(self.root, "clipboard_append") as clipboard:
+            self.app.collaboration_button.invoke()
+            prompt = clipboard.call_args.args[0]
+            self.assertNotIn(self.app.bridge.token, prompt)
+            self.assertIn(str(Path(sys.executable)), prompt)
+            self.assertIn("--input", prompt)
+            self.assertTrue(self.app.ai_enabled.get())
+            self.assertTrue(self.app.ai.enabled.is_set())
+            self.assertEqual(json.loads(settings_path().read_text())["port"], self.app.bridge.server_port)
+            self.assertEqual(list(settings_path().parent.glob(".pair-*")), [])
+            client = Path(__file__).resolve().parents[1] / "videocatch_client.py"
+            env = dict(os.environ)
+            env.pop("VIDEOCATCH_TOKEN", None)
+            def call(action):
+                process = subprocess.Popen([sys.executable, str(client), action], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.wait(lambda: process.poll() is not None)
+                out, err = process.communicate()
+                self.assertEqual(err, b"")
+                return process.returncode, json.loads(out.decode("utf-8"))
+            status, result = call("capabilities")
+            self.assertEqual(status, 0, result)
+            self.assertIn("clip", result["parameters"])
+            self.app.ai_enabled.set(False)
+            self.app.toggle_ai()
+            status, result = call("state")
+            self.assertEqual(status, 1)
+            self.assertEqual(result["code"], "collaboration_disabled")
+            self.app.ai.enabled.set()
+            save_pairing("x" * 32, self.app.bridge.server_port)
+            status, result = call("state")
+            self.assertEqual(result["code"], "pairing_expired")
+            self.app.collaboration_button.invoke()
+            self.assertEqual(call("state")[0], 0)
+
+    def test_handoff_failure_does_not_enable_interface(self):
+        self.app.ai.enabled.clear()
+        with patch("app.save_pairing", side_effect=OSError("settings unavailable")):
+            self.app.copy_ai_collaboration()
+        self.assertFalse(self.app.ai.enabled.is_set())
+        self.assertFalse(self.app.ai_enabled.get())
+        self.assertIn("未复制成功", self.app.notice.get())
+
+    def test_frozen_handoff_quotes_paths_and_missing_client(self):
+        base = self.folder / "拾影 O'Brien"
+        base.mkdir()
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(base / "VideoCatch.exe")):
+            with self.assertRaises(FileNotFoundError):
+                collaboration_prompt()
+            (base / "VideoCatchAI.exe").touch()
+            prompt = collaboration_prompt()
+        self.assertIn("O''Brien", prompt)
+        self.assertIn("VideoCatchAI.exe' state", prompt)
+
+    def test_client_reports_missing_pairing_and_bad_json(self):
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(self.folder)}):
+            env = dict(os.environ)
+            env.pop("VIDEOCATCH_TOKEN", None)
+            client = Path(__file__).resolve().parents[1] / "videocatch_client.py"
+            def call(*args):
+                result = subprocess.run([sys.executable, str(client), *args], env=env, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stderr, b"")
+                return json.loads(result.stdout.decode("utf-8"))
+            self.assertEqual(call("state")["code"], "pairing_required")
+            save_pairing(self.app.bridge.token, self.app.bridge.server_port)
+            self.assertEqual(call("clip", "--json", "bad")["code"], "invalid_input")
+            self.assertEqual(call("clip", "--json", "[]")["code"], "invalid_input")
 
     def test_extension_capture_api_download_and_clip_end_to_end(self):
         source = self.fixture()

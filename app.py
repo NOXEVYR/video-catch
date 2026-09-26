@@ -8,13 +8,16 @@ import queue
 import subprocess
 import sys
 import threading
+import uuid
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from core import Store, start_bridge, safe_headers
+from core import Store, start_bridge, safe_headers, MAX_ITEMS
 from engine import download_worker
 from clipper import clip_worker
 from ai_api import Api, ApiError, BUSY
+from collaboration import collaboration_prompt, save_pairing
+from runtime_paths import distribution_root, open_local
 from pages import bili_page, video_page, observed_formats
 from network import SYSTEM, DIRECT, proxy_value, discover_local_proxies
 
@@ -22,12 +25,8 @@ from ui import BG, PANEL, FG, MUTED, ACCENT
 
 
 def enable_dpi_awareness():
-    if os.name == "nt":
-        import ctypes
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except (AttributeError, OSError):
-            pass
+    from capture_native import enable_dpi_awareness as enable_capture_dpi
+    enable_capture_dpi()
 
 
 class App:
@@ -39,7 +38,7 @@ class App:
         self.jobs = {}
         self.pending = []
         self.closing = False
-        self.folder = tk.StringVar(value=str(Path.home() / "Videos" / "VideoCatch"))
+        self.folder = tk.StringVar(value=str(Path.home() / ("Movies" if sys.platform == "darwin" else "Videos") / "VideoCatch"))
         self.notice = tk.StringVar(value="准备就绪 · 添加链接，或连接浏览器开始发现视频。")
         self.connection = tk.StringVar(value="等待浏览器连接")
         self.detail = tk.StringVar(value="选择视频查看详情 · 按 Ctrl / Shift 可多选")
@@ -49,6 +48,21 @@ class App:
         self.ai = Api(self)
         self.bridge.ai = self.ai
         self.ai_enabled = tk.BooleanVar(value=False)
+        from recorder import Recorder
+        self.recorder = Recorder()
+        self.recording_panel = None
+        self.recording_toolbar = None
+        self.annotations = None
+        self.global_hotkeys = None
+        self.record_hotkeys = tk.BooleanVar(value=False)
+        self.record_hotkey_status = tk.StringVar(value="快捷键未启用")
+        self.capture_events = queue.Queue()
+        self.screenshot_pending = False
+        self.capture_inventory = {"cameras": [], "microphones": [], "systems": [], "loading": False, "loaded": False}
+        self.last_capture_options = {"mode": "screen", "audio": "none", "fps": 30,
+                                     "quality": "balanced", "cursor": True, "duration": 0}
+        self.exit_after_capture = False
+        self.recording_notice_id = None
         self.build_ui()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.tick()
@@ -94,6 +108,223 @@ class App:
             self.ai.enabled.clear()
             self.notice.set("AI 接口已关闭；已提交的任务仍可在视频列表中取消。")
 
+    def copy_ai_collaboration(self):
+        try:
+            prompt = collaboration_prompt()
+            save_pairing(self.bridge.token, self.bridge.server_port)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(prompt)
+        except (OSError, ValueError, tk.TclError) as error:
+            self.notice.set(f"协作指引未复制成功：{error}；请重试。")
+            return
+        self.ai_enabled.set(True)
+        self.ai.enabled.set()
+        self.notice.set("协作已开启，指引已复制。粘贴给能执行本机命令的 AI，再描述要下载或截取的视频。")
+
+    def open_recording(self):
+        from recording_ui import RecordingPanel
+        if self.recording_panel is None:
+            self.recording_panel = RecordingPanel(self)
+        self.recording_panel.show()
+
+    def _capture_ready(self):
+        if self.exit_after_capture:
+            raise RuntimeError("拾影正在结束录制并退出")
+        selector = getattr(self.recording_panel, "selector", None)
+        if selector is not None and getattr(selector, "active", False):
+            raise RuntimeError("请先完成或取消选区")
+        with self.store.lock:
+            if len(self.store.items) >= MAX_ITEMS:
+                raise ValueError("列表已满，请先清除记录")
+
+    def _capture_folder(self, options):
+        value = options.get("folder", self.folder.get())
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("请选择保存目录")
+        path = Path(value).expanduser().resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
+    def _capture_item(self, ident, operation, title, status):
+        with self.store.lock:
+            self.store.items[ident] = {"id": ident, "operation": operation, "title": title,
+                "kind": "屏幕录制" if operation == "record" else "屏幕截图", "source": "本机", "host": "本机",
+                "url": "", "headers": {}, "size": "", "status": status, "progress": "", "path": "", "error": ""}
+
+    def start_recording(self, options):
+        from recorder import normalize_options
+        self._capture_ready()
+        if self.recorder.is_busy:
+            raise RuntimeError("已有录制任务，请先停止并保存")
+        options = dict(options)
+        folder = self._capture_folder(options)
+        options.pop("folder", None)
+        normalized = normalize_options(options)
+        if self.annotations and self.annotations.active and normalized["mode"] in {"window", "camera"}:
+            raise ValueError("窗口或摄像头录制不能包含桌面画笔，请先关闭标注")
+        snapshot = self.recorder.start(normalized, folder)
+        self.last_capture_options = dict(normalized)
+        self._capture_item(snapshot["id"], "record", "屏幕录制", snapshot["status"])
+        self.recording_notice_id = None
+        from recording_ui import RecordingToolbar
+        if self.recording_toolbar is None:
+            self.recording_toolbar = RecordingToolbar(self)
+        self.notice.set("录制已启动，使用浮动工具条停止并保存。")
+        return dict(snapshot, ok=True)
+
+    def pause_recording(self):
+        return dict(self.recorder.pause(), ok=True)
+
+    def resume_recording(self):
+        return dict(self.recorder.resume(), ok=True)
+
+    def stop_recording(self):
+        return dict(self.recorder.stop(), ok=True)
+
+    def capture_screenshot(self, options):
+        from recorder import normalize_options, screenshot
+        self._capture_ready()
+        if self.screenshot_pending:
+            raise RuntimeError("正在截图，请等待完成")
+        options = dict(options)
+        folder = self._capture_folder(options)
+        options.pop("folder", None)
+        if options.get("mode", "screen") == "camera":
+            raise ValueError("截图请使用全屏、区域或窗口模式")
+        if self.annotations and self.annotations.active and options.get("mode") == "window":
+            raise ValueError("窗口截图不能包含桌面画笔，请先退出标注或改用区域截图")
+        options.update(audio="none", camera="", duration=0)
+        normalized = normalize_options(options)
+        ident = uuid.uuid4().hex[:20]
+        self._capture_item(ident, "screenshot", "屏幕截图", "截图中")
+        self.screenshot_pending = True
+        events = self.capture_events
+        def capture():
+            try:
+                result = screenshot(normalized, folder)
+            except Exception as error:
+                result = {"status": "失败", "error": str(error), "path": ""}
+            events.put(("screenshot", ident, result))
+        threading.Thread(target=capture, daemon=True).start()
+        return {"ok": True, "id": ident, "status": "截图中"}
+
+    def capture_sources(self, refresh=False):
+        from capture_native import desktop_bounds, list_monitors, list_windows
+        if (refresh or not self.capture_inventory["loaded"]) and not self.capture_inventory["loading"]:
+            self.capture_inventory["loading"] = True
+            events = self.capture_events
+            def load_devices():
+                from recorder import device_inventory
+                try:
+                    result = device_inventory()
+                except Exception as error:
+                    result = {"cameras": [], "microphones": [], "systems": [], "error": str(error)}
+                events.put(("devices", "", result))
+            threading.Thread(target=load_devices, daemon=True).start()
+        return {"ok": True, "desktop": desktop_bounds(), "monitors": list_monitors(),
+                "windows": list_windows(), "devices": dict(self.capture_inventory)}
+
+    def toggle_annotations(self):
+        if self.recorder.is_busy and self.recorder.snapshot().get("options", {}).get("mode") in {"window", "camera"}:
+            self.notice.set("桌面画笔适用于全屏或区域录制；窗口／摄像头录制不会包含桌面标注。")
+            return
+        from capture_overlays import AnnotationOverlay
+        if self.annotations is None:
+            self.annotations = AnnotationOverlay(self.root, on_input_ready=self._raise_recording_controls)
+        self.annotations.toggle()
+
+    def _raise_recording_controls(self):
+        window = getattr(self.recording_toolbar, "window", None)
+        if window is not None and window.winfo_exists():
+            annotation = getattr(self.annotations, "toolbar", None)
+            if annotation is not None and annotation.winfo_exists():
+                from capture_native import _tk_hwnd, window_info, place_window
+                window.update_idletasks()
+                annotation.update_idletasks()
+                try:
+                    controls_bounds = window_info(_tk_hwnd(window))
+                    annotation_bounds = window_info(_tk_hwnd(annotation))
+                except (OSError, ValueError, tk.TclError):
+                    # A minimized or closing control window must not stop the UI tick.
+                    return
+                minimum_top = controls_bounds["y"] + controls_bounds["height"] + 12
+                if annotation_bounds["y"] < minimum_top:
+                    place_window(annotation, dict(x=annotation_bounds["x"], y=minimum_top,
+                                                  width=annotation_bounds["width"],
+                                                  height=annotation_bounds["height"]))
+            window.lift()
+
+    def _hotkey_action(self, action):
+        try:
+            if self.exit_after_capture:
+                return
+            state = self.recorder.snapshot().get("status")
+            if action == "start_stop":
+                if self.recorder.is_busy:
+                    self.stop_recording()
+                elif self.recording_panel is not None:
+                    self.recording_panel.start()
+                else:
+                    self.open_recording()
+            elif action == "pause_resume":
+                if state == "录制暂停":
+                    self.resume_recording()
+                elif state == "录制中":
+                    self.pause_recording()
+            elif action == "screenshot":
+                if self.recording_panel is None:
+                    self.open_recording()
+                    self.notice.set("先在录制面板选择截图范围，再按截图快捷键。")
+                else:
+                    self.recording_panel.screenshot()
+            elif action == "annotate":
+                self.toggle_annotations()
+        except (OSError, ValueError, RuntimeError) as error:
+            self.notice.set(str(error))
+
+    def toggle_record_hotkeys(self):
+        if self.global_hotkeys is not None:
+            self.global_hotkeys.close()
+            self.global_hotkeys = None
+        if self.record_hotkeys.get():
+            from capture_native import HotkeyManager
+            self.global_hotkeys = HotkeyManager(self.root, {name: lambda n=name: self._hotkey_action(n)
+                for name in ("start_stop", "pause_resume", "screenshot", "annotate")})
+            result = self.global_hotkeys.start()
+            failed = [item.get("hotkey", name) for name, item in result.items() if not item.get("registered")]
+            self.record_hotkey_status.set("快捷键占用：" + "、".join(failed) if failed else "Ctrl+Alt+F9 录制/停止 · F10 暂停 · F11 截图 · F12 画笔")
+        else:
+            self.record_hotkey_status.set("快捷键未启用")
+
+    def _refresh_capture(self):
+        while True:
+            try:
+                action, ident, result = self.capture_events.get_nowait()
+            except queue.Empty:
+                break
+            if action == "devices":
+                self.capture_inventory = dict(result, loading=False, loaded=True)
+            elif action == "screenshot":
+                self.screenshot_pending = False
+                self.store.update(ident, **{k: result.get(k, "") for k in ("status", "path", "error")},
+                                  progress="100%" if result.get("status") == "已保存" else "截图未完成")
+                self.notice.set("截图已保存：" + result["path"] if result.get("status") == "已保存" else "截图失败：" + result.get("error", "未知错误"))
+        snapshot = self.recorder.snapshot()
+        ident = snapshot.get("id")
+        if ident:
+            elapsed = max(0, int(snapshot.get("elapsed", 0)))
+            self.store.update(ident, **{k: snapshot.get(k, "") for k in ("status", "path", "error")},
+                elapsed=elapsed, progress=f"{elapsed // 3600:02}:{elapsed // 60 % 60:02}:{elapsed % 60:02}")
+            if snapshot.get("status") in {"已保存", "失败"} and self.recording_notice_id != ident:
+                self.recording_notice_id = ident
+                self.notice.set("录制已保存：" + snapshot.get("path", "") if snapshot["status"] == "已保存" else "录制失败：" + snapshot.get("error", ""))
+        if self.recording_panel is not None:
+            self.recording_panel.refresh()
+        if self.recording_toolbar is not None:
+            self.recording_toolbar.refresh()
+            if self.annotations is not None and self.annotations.active:
+                self._raise_recording_controls()
+
     def clip_dialog(self):
         source = filedialog.askopenfilename(parent=self.root, title="选择要裁剪的本地视频", filetypes=[("视频", "*.mp4 *.mkv *.mov *.webm *.avi *.m4v *.flv *.ts")])
         if not source:
@@ -124,13 +355,16 @@ class App:
         ttk.Button(box, text="开始裁剪", command=submit).grid(row=4, columnspan=2, pady=8)
 
     def open_guide(self):
-        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
-        os.startfile(str(base / "使用指南.html"))
+        base = distribution_root()
+        open_local(base / "使用指南.html")
+        if sys.platform == "darwin":
+            open_local(base / "extension")
+            return
         import ctypes
         desktop = ctypes.create_unicode_buffer(260)
         ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, desktop)
         standalone = Path(desktop.value) / "拾影浏览器扩展"
-        os.startfile(str(standalone if (standalone / "manifest.json").is_file() else base / "extension"))
+        open_local(standalone if (standalone / "manifest.json").is_file() else base / "extension")
 
     def pause(self):
         with self.store.lock:
@@ -212,7 +446,7 @@ class App:
         try:
             p = Path(self.folder.get()).expanduser().resolve()
             p.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(p))
+            open_local(p)
         except OSError as error:
             messagebox.showerror("无法打开目录", str(error), parent=self.root)
 
@@ -233,12 +467,19 @@ class App:
         with self.store.lock:
             for ident in selected:
                 item = self.store.items.get(ident)
-                if item and item.get("operation") != "clip" and item["status"] not in BUSY | {"已保存"}:
+                if item and item.get("operation") not in {"clip", "record", "screenshot"} and item["status"] not in BUSY | {"已保存"}:
                     self.store.update(ident, status="排队中", progress="等待下载", error="")
                     self.pending.append((dict(item, proxy=self.proxy.get()), str(folder)))
         self.notice.set("已加入下载队列，最多同时下载 2 个视频。")
 
     def kill_job(self, ident):
+        if self.store.items.get(ident, {}).get("operation") == "record":
+            if self.recorder.snapshot().get("id") == ident and self.recorder.is_busy:
+                self.stop_recording()
+            return
+        if self.store.items.get(ident, {}).get("operation") == "screenshot":
+            self.notice.set("截图正在保存，请等待完成。")
+            return
         job = self.jobs.pop(ident, None)
         if job:
             process, events = job
@@ -313,6 +554,10 @@ class App:
         if self.closing:
             return
         self.ai.pump()
+        self._refresh_capture()
+        if self.exit_after_capture and not self.recorder.is_busy and not self.screenshot_pending:
+            self.close()
+            return
         try:
             proxies = self.network_results.get_nowait()
             self.detect_button.configure(state="normal")
@@ -355,11 +600,30 @@ class App:
         self.tick_timer = self.root.after(500, self.tick)
 
     def close(self):
+        if self.recorder.is_busy or self.screenshot_pending:
+            if not self.exit_after_capture:
+                if not messagebox.askyesno("结束录制并退出", "正在录制或保存截图。先停止并保存，再退出拾影？", parent=self.root):
+                    return
+                self.exit_after_capture = True
+                self.ai.enabled.clear()
+                if self.recorder.is_busy:
+                    self.recorder.stop()
+                self.notice.set("正在保存录制，请等待完成后自动退出。")
+            return
         if self.jobs or self.pending:
             if not messagebox.askyesno("退出拾影", "还有视频任务正在执行或排队。退出将停止任务，是否退出？", parent=self.root):
+                self.exit_after_capture = False
                 return
         self.closing = True
         self.ai.enabled.clear()
+        if self.global_hotkeys is not None:
+            self.global_hotkeys.close()
+        if self.annotations is not None:
+            self.annotations.close()
+        if self.recording_panel is not None:
+            self.recording_panel.close()
+        if self.recording_toolbar is not None:
+            self.recording_toolbar.close()
         if getattr(self, "tick_timer", None):
             self.root.after_cancel(self.tick_timer)
         if getattr(self, "layout_timer", None):
@@ -375,6 +639,7 @@ class App:
         self.ai.app = None
         self.root.update_idletasks()
         self.root.destroy()
+        self.recording_panel = self.recording_toolbar = self.annotations = self.global_hotkeys = None
 
 
 def main():
@@ -384,9 +649,26 @@ def main():
         captured_check = "--verify-capture-json" in sys.argv
         clip_check = "--verify-clip-json" in sys.argv
         verification = "--verify-download" in sys.argv or captured_check or clip_check
-        app = App(root, smoke="--smoke-test" in sys.argv or verification)
+        recording_check = "--verify-recording-json" in sys.argv
+        app = App(root, smoke="--smoke-test" in sys.argv or verification or recording_check)
         if "--smoke-test" in sys.argv:
             root.after(1200, app.close)
+        if recording_check:
+            # Developer check: options explicitly identify an isolated test source.
+            options_file, folder, report = sys.argv[2:5]
+            options = json.loads(Path(options_file).read_text(encoding="utf-8"))
+            if not 0 < options.get("duration", 0) <= 10 or options.get("audio", "none") != "none":
+                raise ValueError("录制验证需要 0～10 秒时长和关闭声音")
+            root.withdraw()
+            app.folder.set(folder)
+            app.start_recording(options)
+            def check_recording():
+                if app.recorder.is_busy:
+                    root.after(250, check_recording)
+                    return
+                Path(report).write_text(json.dumps(app.recorder.snapshot(), ensure_ascii=False), encoding="utf-8")
+                app.close()
+            root.after(250, check_recording)
         if verification:
             # Developer integration check; uses the same UI queue and frozen worker path.
             url, folder, report = sys.argv[2:5]

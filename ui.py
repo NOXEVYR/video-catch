@@ -30,7 +30,8 @@ def rounded_card(parent, padding):
 def build_ui(app):
     root = app.root
     assets = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets"
-    root.iconbitmap(str(assets / "videocatch.ico"))
+    if sys.platform != "darwin":
+        root.iconbitmap(str(assets / "videocatch.ico"))
     root.title("拾影 VideoCatch · 视频工作台")
     scale = max(1, root.winfo_fpixels("1i") / 96)
     aw, ah = root.winfo_screenwidth() - 60, root.winfo_screenheight() - 90
@@ -57,6 +58,9 @@ def build_ui(app):
     style.configure("TEntry", fieldbackground=FIELD, foreground=FG, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE, insertcolor=FG, padding=9)
     style.map("TEntry", bordercolor=[("focus", ACCENT)])
     style.configure("TCombobox", fieldbackground=FIELD, foreground=FG, background=FIELD, arrowcolor=MUTED, padding=7, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE)
+    style.map("TCombobox", fieldbackground=[("disabled", PANEL), ("readonly", FIELD)],
+              foreground=[("disabled", "#82758f"), ("readonly", FG)],
+              selectbackground=[("readonly", FIELD)], selectforeground=[("readonly", FG)])
     root.option_add("*TCombobox*Listbox.background", FIELD)
     root.option_add("*TCombobox*Listbox.foreground", FG)
     root.option_add("*TCombobox*Listbox.selectBackground", "#554261")
@@ -86,6 +90,14 @@ def build_ui(app):
     ttk.Button(header, text=" 裁剪本地视频", image=app.ui_icons["cut"], compound="left", command=app.clip_dialog).pack(side="right", padx=(12, 0))
     ttk.Button(header, text=" 复制配对码", image=app.ui_icons["pair"], compound="left", command=app.copy_pairing).pack(side="right", padx=(12, 0))
     ttk.Button(header, text=" 连接浏览器", image=app.ui_icons["browser"], compound="left", command=app.open_guide).pack(side="right")
+
+    collaboration = ttk.Frame(outer)
+    collaboration.pack(fill="x", pady=(0, 12))
+    app.collaboration_button = ttk.Button(collaboration, text="开启协作并复制", style="Accent.TButton", command=app.copy_ai_collaboration)
+    app.collaboration_button.pack(side="left")
+    ttk.Button(collaboration, text="录屏 / 截图", command=app.open_recording).pack(side="left", padx=(10, 0))
+    ttk.Label(collaboration, text="下载、录制、截取，交给拾影", style="Muted.TLabel").pack(side="left", padx=12)
+    ttk.Checkbutton(collaboration, text="允许 AI 协作", variable=app.ai_enabled, command=app.toggle_ai).pack(side="right")
 
     # A direct link is an independent entry point; never hidden behind extension setup.
     entry_card = rounded_card(outer, padding=(17, 13))
@@ -117,11 +129,10 @@ def build_ui(app):
     ttk.Label(network, text="下载超时时可检测连接", style="CardMuted.TLabel").pack(side="left")
     bottom = ttk.Frame(footer)
     bottom.pack(fill="x", pady=(9, 0))
-    ttk.Checkbutton(bottom, text="启用 AI 接口", variable=app.ai_enabled, command=app.toggle_ai).pack(side="right")
-    ttk.Label(bottom, text="0.4.2  ·  本地视频工作台", style="Muted.TLabel", font=("Microsoft YaHei UI", 8)).pack(side="right", padx=12)
+    ttk.Label(bottom, text="0.5.0  ·  本地视频工作台", style="Muted.TLabel", font=("Microsoft YaHei UI", 8)).pack(side="right", padx=12)
     notice = ttk.Label(bottom, textvariable=app.notice, foreground=ACCENT, wraplength=700, font=("Microsoft YaHei UI", 8))
     notice.pack(side="left", fill="x", expand=True)
-    bottom.bind("<Configure>", lambda e: notice.configure(wraplength=max(230, e.width - 380)))
+    bottom.bind("<Configure>", lambda e: notice.configure(wraplength=max(230, e.width - 210)))
 
     guide = ttk.Frame(outer)
     guide.pack(fill="x", pady=(1, 12))
@@ -197,7 +208,8 @@ def build_ui(app):
 def refresh_ui(app, tabs, items, clients):
     watching = sum(t["watching"] for t in tabs)
     app.source_count.set(f"{clients} 个浏览器 · {watching} 监听" if clients else "尚未连接")
-    busy = sum(i["status"] in {"排队中", "解析中", "下载中", "整理文件", "裁剪中"} for i in items)
+    from ai_api import BUSY
+    busy = sum(i["status"] in BUSY for i in items)
     done = sum(i["status"] == "已保存" for i in items)
     app.media_count.set(f"{len(items)} 个视频 · {done} 已保存" + (f" · {busy} 处理中" if busy else ""))
     for box, rows in ((app.empty_tabs, tabs), (app.empty_media, items)):
@@ -206,5 +218,5 @@ def refresh_ui(app, tabs, items, clients):
         else:
             box.place(relx=.5, rely=.53, anchor="center")
     for item in items:
-        tag = "done" if item["status"] == "已保存" else "error" if item["status"] == "失败" else "busy" if item["status"] in {"排队中", "解析中", "下载中", "整理文件", "裁剪中"} else ""
+        tag = "done" if item["status"] == "已保存" else "error" if item["status"] == "失败" else "busy" if item["status"] in BUSY else ""
         app.media.item(item["id"], tags=(tag,))

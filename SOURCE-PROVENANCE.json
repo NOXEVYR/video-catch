@@ -2,8 +2,8 @@
   "repository": "https://github.com/NOXEVYR/video-catch",
   "base_source_archive_sha256": "5be0181e748ef77104f8f64582375d653b5bb481577835aa81b8bef42039f377",
   "original_release_sha256": "796eb2831f2871b129a3cc708c352323fdc7d5a10def553feb6bec0313cc5024",
-  "changes": "Selected icon 06 Sunset Light Trail; coordinated dusk-purple and peach native UI, rounded panels, toolbar glyphs and empty-state illustrations",
-  "version": "0.4.2",
-  "base_source_commit": "a2fe15f47ee195621a2aa5d674c4a7948c637e20",
-  "build_source_commit": "Recorded in release tag and build provenance"
+  "changes": "Local AI collaboration, Windows and macOS recording, camera overlays, audio, annotations, hotkeys and PNG capture; per-platform build source commit is recorded in runtime-manifest.json",
+  "version": "0.5.0",
+  "base_source_commit": "d49cc14f282d6b342b7bd8fc312ea9d5d5b3dd78",
+  "build_source_commit": "Local working tree; source diff delivered with local build"
 }

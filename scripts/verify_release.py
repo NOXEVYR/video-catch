@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import zipfile
+from unittest.mock import patch
 
 root=Path(__file__).resolve().parent.parent
 source=root
@@ -62,9 +63,17 @@ sys.path.insert(0,str(source))
 import tkinter as tk
 from app import App
 window=tk.Tk();window.withdraw()
-app=App(window)
-app.ai.enabled.set()
-env=dict(os.environ,VIDEOCATCH_TOKEN=app.bridge.token)
+app=App(window,smoke=True)
+local_settings=fixture/'client-settings'
+with patch.dict(os.environ,{'LOCALAPPDATA':str(local_settings)}), \
+     patch.object(sys,'frozen',True,create=True), patch.object(sys,'executable',str(exe)), \
+     patch.object(window,'clipboard_clear'), patch.object(window,'clipboard_append') as clipboard:
+    app.collaboration_button.invoke()
+    handoff=clipboard.call_args.args[0]
+    assert app.ai.enabled.is_set() and app.bridge.token not in handoff
+    assert str(package/'VideoCatchAI.exe').replace("'","''") in handoff
+env=dict(os.environ,LOCALAPPDATA=str(local_settings))
+env.pop('VIDEOCATCH_TOKEN',None)
 results=[]
 def client():
     p=subprocess.run([str(package/'VideoCatchAI.exe'),'capabilities'],env=env,capture_output=True,timeout=20)
@@ -80,6 +89,6 @@ try:
     assert data['ok'] and 'clip' in data['actions']
 finally:
     app.close()
-result={'archive_crc':'passed','manifest_files':len(manifest['files']),'frozen_download_sha256':'passed','frozen_clip_audio_video_decode':'passed','clip_duration_seconds':times[-1],'packaged_client_http':'passed','third_party_sites':'not_tested','user_visual_acceptance':'not_tested'}
+result={'archive_crc':'passed','manifest_files':len(manifest['files']),'frozen_download_sha256':'passed','frozen_clip_audio_video_decode':'passed','clip_duration_seconds':times[-1],'packaged_client_http':'passed','one_click_local_pairing':'passed','credential_free_handoff':'passed','third_party_sites':'not_tested','user_visual_acceptance':'not_tested'}
 args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(result))

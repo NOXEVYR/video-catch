@@ -1,56 +1,53 @@
-name: VideoCatch Windows release
+name: VideoCatch verified platform builds
 on:
-  push:
-    branches: [main]
-    paths: [build.py, .github/workflows/release.yml]
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 concurrency:
-  group: videocatch-release
+  group: videocatch-build-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 35
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+            python_arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+            python_arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     env:
       PYTHONUTF8: '1'
-    defaults:
-      run:
-        shell: pwsh
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11.9'
-          architecture: x64
-      - name: Install pinned build dependencies
+          python-version: '3.12'
+          architecture: ${{ matrix.python_arch }}
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify platform and isolated capture planning
         run: |
-          python -m pip install -r requirements.txt
-          if ($LASTEXITCODE) { throw 'Dependencies failed' }
-      - name: Regression tests
-        run: |
-          python -m unittest discover -s tests -v
-          if ($LASTEXITCODE) { throw 'Python tests failed' }
+          test "$(uname -m)" = '${{ matrix.arch }}'
+          python -m unittest discover -s tests -p 'test_capture_macos.py' -v
+          python -m unittest discover -s tests -p 'test_recorder.py' -v
+          python -m unittest discover -s tests -p 'test_runtime_paths.py' -v
           node --test tests/extension.test.cjs
-          if ($LASTEXITCODE) { throw 'Extension tests failed' }
-      - name: Build Windows and extension packages
-        run: |
-          python build.py
-          if ($LASTEXITCODE) { throw 'Build failed' }
-      - name: Verify packaged EXE and client
-        run: |
-          python scripts/verify_release.py releases/VideoCatch-v0.4.2-Windows-x64.zip --report releases/verification-v0.4.2.json
-          if ($LASTEXITCODE) { throw 'Package verification failed' }
-      - name: Keep verified artifacts for recovery
-        uses: actions/upload-artifact@v4
+      - name: Build native application and client
+        run: python build_macos.py --arch '${{ matrix.arch }}'
+      - name: Verify extracted app and synthetic download / clip
+        run: python scripts/verify_macos.py releases/VideoCatch-v0.5.0-macOS-${{ matrix.arch }}.zip --report releases/verification-v0.5.0-macOS-${{ matrix.arch }}.json --gui
+      - uses: actions/upload-artifact@v4
         with:
-          name: VideoCatch-v0.4.2-verified
+          name: VideoCatch-v0.5.0-macOS-${{ matrix.arch }}-verified
           path: |
-            releases/*.zip
-            releases/*.json
+            releases/VideoCatch-v0.5.0-macOS-${{ matrix.arch }}.zip
+            releases/checksums-v0.5.0-macOS-${{ matrix.arch }}.json
+            releases/verification-v0.5.0-macOS-${{ matrix.arch }}.json
+          if-no-files-found: error
           retention-days: 30
-      - name: Upload draft, download and verify, then publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python scripts/publish_release.py

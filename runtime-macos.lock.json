@@ -1,0 +1,20 @@
+{
+  "deno": {
+    "version": "2.9.6",
+    "license": "MIT",
+    "source": "https://github.com/denoland/deno/tree/v2.9.6",
+    "digest_source": "https://api.github.com/repos/denoland/deno/releases/tags/v2.9.6",
+    "architectures": {
+      "arm64": {
+        "url": "https://github.com/denoland/deno/releases/download/v2.9.6/deno-aarch64-apple-darwin.zip",
+        "sha256": "213a2f304f04d3c9cb5220669afad138f60a5aab1fe80962abdeb8f35807a472",
+        "bytes": 38446106
+      },
+      "x86_64": {
+        "url": "https://github.com/denoland/deno/releases/download/v2.9.6/deno-x86_64-apple-darwin.zip",
+        "sha256": "7d4524b82bcc557fe020a1a5b56956ed42b992ae5b28026e8ad5d17329533f5f",
+        "bytes": 42264433
+      }
+    }
+  }
+}

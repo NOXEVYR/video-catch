@@ -13,14 +13,15 @@ from network import proxy_value
 
 def javascript_runtimes():
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
-    for path in [root / "tools" / "deno.exe", root / ".build" / "tools" / "deno.exe"]:
+    binary = "deno" if sys.platform == "darwin" else "deno.exe"
+    for path in [root / "tools" / binary, root / ".build" / "tools" / binary]:
         if path.is_file():
             return {"deno": {"path": str(path)}}
     return {"deno": {}}
 
 
 def ffmpeg_path():
-    bundled = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "tools" / "ffmpeg.exe"
+    bundled = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "tools" / ("ffmpeg" if sys.platform == "darwin" else "ffmpeg.exe")
     if bundled.exists():
         return str(bundled)
     try:

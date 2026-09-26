@@ -1,10 +1,14 @@
-# 拾影 VideoCatch 0.4.2
+# 拾影 VideoCatch 0.5.0 · Windows / macOS
+
+0.5.0 将网页视频下载、本地裁剪、录屏、PNG 截图与 AI 控制集中在一个桌面程序中。Windows 和 macOS 的录制范围与音源支持有差别，见下方平台说明。0.5.0-dev.1、0.4.3 本地更新和既有公开版本保留在 [版本记录](RELEASE-NOTES.md)。
+
+点击顶部「开启协作并复制」，自动完成本机配对、开启接口并复制包含真实调用路径的指引。粘贴给能执行本机命令的 AI，再描述要下载、录制或截取的视频。重启后再点一次即可；取消「允许 AI 协作」可关闭访问。浏览器扩展继续沿用 0.4.2 和桥接协议 3。
 
 落日光轨主题：深紫灰与暖杏色界面，独立链接入口、浏览器来源、视频列表、空状态指引与任务状态色。应用与扩展统一采用「落日光轨」图标，增加圆角分区、功能图标和主题空状态插画。
 
-可由 AI 工具调用的本机接口：标签页监听、视频导入/下载、任务查询/取消、本地视频精确裁剪。界面勾选「启用 AI 接口」后配对客户端；手动裁剪使用「裁剪本地视频」。见 [AI 接口使用说明](AI接口使用说明.md)。接口默认关闭，只允许本机配对客户端访问。
+可由 AI 工具调用的本机接口：标签页监听、视频导入/下载、任务查询/取消、本地视频精确裁剪、录制启停与暂停继续、PNG 截图。点击「开启协作并复制」即可接入；手动裁剪使用「裁剪本地视频」。见 [AI 接口使用说明](AI接口使用说明.md)。接口默认关闭，只允许本机配对客户端访问。
 
-Windows 10 / 11 x64 网页视频捕获与下载工具。通过 Chrome / Edge 扩展监听所选标签页（包括后台标签页）的媒体请求，提取视频地址并交给本地程序下载；也支持导入复制的视频直链或网页分享链接。
+支持 Windows 10 / 11 x64 与 macOS 14 或更新版本。通过 Chrome / Edge 扩展监听所选标签页（包括后台标签页）的媒体请求，提取视频地址并交给本地程序下载；也支持导入复制的视频直链或网页分享链接。
 
 [工具总入口](https://github.com/NOXEVYR/portfolio) · [浏览器扩展源码](extension/) · [验证记录](TEST-REPORT.md) · [仓库迁移说明](MIGRATION.md)
 
@@ -12,9 +16,12 @@ Windows 10 / 11 x64 网页视频捕获与下载工具。通过 Chrome / Edge 扩
 
 ## 下载与独立扩展
 
-- **[下载 Windows 程序 0.4.2](https://github.com/NOXEVYR/video-catch/releases/download/v0.4.2/VideoCatch-v0.4.2-Windows-x64.zip)**：完整解压，双击 `VideoCatch.exe`，保留 `_internal` 等全部文件。自带 Python、yt-dlp、FFmpeg、Deno 和 YouTube JavaScript 解析组件，无需另装运行环境。
+- **[Windows 0.5.0 发布说明与下载](https://github.com/NOXEVYR/video-catch/releases/tag/v0.5.0)**：选择 Windows-x64 包，完整解压后双击 `VideoCatch.exe`，保留 `_internal` 等全部文件。
+- **[macOS 0.5.0 发布说明与下载](https://github.com/NOXEVYR/video-catch/releases/tag/v0.5.0)**：要求 macOS 14+；Apple Silicon 选择 `arm64`，Intel 选择 `x86_64`，以发布页实际提供且通过构建校验的包为准。完整解压并保留 `VideoCatch` 文件夹，双击 `VideoCatch.app`；`VideoCatchAI`、文档和 `extension` 必须保留在 `.app` 旁边，不能只移动 `.app`。
+- 两个平台均自带 Python、yt-dlp、FFmpeg、Deno 和 YouTube JavaScript 解析组件。macOS 包没有 Developer ID 签名或 Apple 公证；首次被系统阻止时，先核实下载来源，再按「系统设置 → 隐私与安全性」中的系统提示允许打开。
 - **[单独下载 Chrome / Edge 扩展 0.4.2](https://github.com/NOXEVYR/video-catch/releases/download/v0.4.2/VideoCatch-Extension-v0.4.2.zip)**：独立扩展包，不需要从程序包中寻找。解压后的 `VideoCatch-extension` 是要导入浏览器的文件夹。
-- 程序与扩展需要配合使用。扩展不能独立下载；只粘贴网页链接下载时可以不安装扩展。SHA-256、大小和包体验证记录见 [0.4.2 发布页](https://github.com/NOXEVYR/video-catch/releases/tag/v0.4.2)。
+- 扩展用于网页监听，不能独立下载；导入链接、本地裁剪和录屏截图不要求安装扩展。各平台最终包的 SHA-256、大小和验收范围见 [0.5.0 发布页](https://github.com/NOXEVYR/video-catch/releases/tag/v0.5.0) 与 [验证记录](TEST-REPORT.md)。**macOS 屏幕、摄像头、麦克风及权限交互尚未经过人工硬件验收**，自动构建或合成媒体检查不代表这部分已通过。
+- 历史下载保留：[Windows 0.4.2](https://github.com/NOXEVYR/video-catch/releases/download/v0.4.2/VideoCatch-v0.4.2-Windows-x64.zip) · [0.4.2 发布记录](https://github.com/NOXEVYR/video-catch/releases/tag/v0.4.2)。
 
 **扩展必须单独放在固定位置；导入后不能移动或删除这个文件夹。** 推荐放在桌面「拾影浏览器扩展」或自己的固定工具目录。浏览器直接读取该目录，ZIP 可以删除，解压后的文件夹必须保留。程序包中也保留 `extension` 副本供备用。
 
@@ -30,7 +37,7 @@ Windows 10 / 11 x64 网页视频捕获与下载工具。通过 Chrome / Edge 扩
 
 ### 已经安装过旧版
 
-关闭旧桌面程序，使用新版 EXE。把新扩展文件复制到原来的固定扩展目录，覆盖同名文件，在扩展管理页点「重新加载」，检查版本为 0.4.2，再配对并刷新视频网页。若要改成新的固定目录，请先移除旧扩展再从新目录加载。不要同时加载两份拾影扩展。**桌面程序和扩展要一起更新**，0.4.2 保持桥接协议 3，建议同步更新以获得一致的界面和版本标识。
+关闭旧桌面程序，使用新版 EXE 或完整 macOS 程序目录。0.5.0 继续兼容扩展 0.4.2；已有该版扩展无需替换，重新配对即可。若升级更早的扩展，把新扩展文件复制到原固定目录，覆盖同名文件，在扩展管理页点「重新加载」，检查版本为 0.4.2，再配对并刷新视频网页。更换扩展目录时先移除旧扩展再从新目录加载，不要同时加载两份。
 
 ### B 站
 
@@ -45,6 +52,33 @@ Windows 10 / 11 x64 网页视频捕获与下载工具。通过 Chrome / Edge 扩
 ### 其他网站或软件
 
 未发现直链时，可点「直接添加所选页面」；也可将其他软件复制的 HTTP/HTTPS 视频直链或网页分享链接粘贴到「其他来源」。不支持任意桌面进程的 HTTPS 嗅探，无法复制链接的专有客户端不在本版范围内。网页解析的兼容范围取决于站点，不保证所有视频都可下载。
+
+## 本地录屏与截图
+
+点击顶部「录屏 / 截图」，输出使用主窗口选定的保存目录。本地录制不需要浏览器扩展；录屏会重新编码为 MP4，与下载网页原始媒体是两种保存方式。
+
+1. 选择范围：「区域录制」先点「框选区域」，拖动后松开，Esc 取消；「窗口录制」先刷新并选取目标；「仅摄像头」选择设备。**Windows 全屏包含整个虚拟桌面，窗口模式采集客户区；macOS 全屏仅录主显示器，区域和窗口必须完整位于同一显示器。macOS 窗口模式是屏幕矩形裁剪，遮挡内容会入镜；窗口移动或调整大小后会停止并保存此次录制。** 目标关闭、隐藏或最小化后不再有效。
+2. 声音默认「不录声音」。可选「系统声音」「麦克风」「系统 + 麦克风」，并选择对应设备。连接或切换设备后点「刷新设备」。Windows 使用输出设备回环采集；**macOS 系统声音需要已有且已配置路由的 BlackHole、Loopback 等虚拟回环输入，并手动选择该设备**，程序不会安装驱动或更改声音输出。屏幕、区域和窗口模式可勾选右下角摄像头画中画；仅摄像头模式直接保存摄像头画面。
+3. 选择预设、画质、10 / 15 / 24 / 30 / 60 帧及定时秒数（0 不限时）。可录制鼠标指针，默认启用「录制时最小化主窗口」。点「开始录制」，默认倒计时 3 秒，也可选「立即开始」。倒计时期间可取消。
+4. 使用浮动工具条「暂停」「继续」「停止并保存」。暂停部分不进入最终视频；继续时需等待重新准备采集。停止后会进入「正在保存」，**直到任务显示「已保存」并出现文件路径，MP4 才算完成**。关闭主窗口时，进行中的录制或截图会提示先保存再退出。
+5. 「截取图片」按当前全屏、区域或窗口范围另存 PNG，不要求音频或摄像头设备；仅摄像头模式不能截图。录制面板在截图完成后恢复。文件使用唯一名称，不覆盖已有视频或图片。
+
+macOS 首次使用时需分别按系统提示允许屏幕录制、摄像头和麦克风访问。无声录屏不要求麦克风；不选择摄像头也不会启用摄像头。实际权限和硬件采集仍需在目标 Mac 上确认。
+
+「屏幕批注 / 画笔」支持颜色、粗细、撤销和清空。「结束绘制」或 Esc 保留笔迹并恢复桌面操作，「继续绘制」可添加笔迹，「退出标注」清除覆盖层。**笔迹只进入全屏或区域录制 / 截图**；窗口、摄像头录制或窗口截图前需退出标注。浮动工具条会尽量排除在采集画面外，是否生效取决于平台支持。
+
+在面板勾选「启用全局快捷键」后生效；如被其他程序占用，面板会显示失败的组合键。先在面板设置录制或截图范围：
+
+| 快捷键 | 操作 |
+| --- | --- |
+| Ctrl + Alt + F9 | 按当前面板设置开始录制，或停止并保存当前录制 |
+| Ctrl + Alt + F10 | 暂停 / 继续 |
+| Ctrl + Alt + F11 | 按当前全屏、区域或窗口范围截图 |
+| Ctrl + Alt + F12 | 打开 / 退出桌面画笔 |
+
+Mac 上 Alt 对应 Option；部分键盘需同时按 Fn 才会发送 F9～F12。
+
+AI 可通过 `capture_sources`、`record_start`、`record_pause`、`record_resume`、`record_stop`、`record_state` 和 `screenshot` 使用这些能力，参数与完整流程见 [AI 接口使用说明](AI接口使用说明.md)。录屏、声音和摄像头应按用户明确要求开启。保存失败时查看任务错误；可能保留录制恢复文件，不要把失败状态当作已生成完整 MP4。
 
 ## 保存方式与范围
 
@@ -88,5 +122,16 @@ node --test tests/extension.test.cjs
 ```
 
 构建产物位于 `releases/`。构建只选择程序依赖和明确列出的文档、扩展文件，不包含下载内容、个人配置或测试环境。依赖版本及 SHA-256 记录在包内 `runtime-manifest.json`，许可见 `licenses/`。
+
+macOS 构建在对应架构的 Mac / Python 环境运行，不支持从 Windows 交叉生成 `.app`：
+
+```sh
+python3 -m venv .build/venv
+.build/venv/bin/python -m pip install -r requirements.txt
+.build/venv/bin/python build_macos.py --arch arm64
+.build/venv/bin/python scripts/verify_macos.py releases/VideoCatch-v0.5.0-macOS-arm64.zip --report .build/macos-verification.json --gui
+```
+
+Intel 构建将 `arm64` 改为 `x86_64`。`--gui` 只增加冻结程序启动和合成媒体下载、裁剪检查，不会录制屏幕或启用摄像头、麦克风。
 
 实现参考：[Chrome webRequest 官方文档](https://developer.chrome.com/docs/extensions/reference/api/webRequest)、[yt-dlp 官方文档](https://github.com/yt-dlp/yt-dlp)、[imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)。
