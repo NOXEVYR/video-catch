@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core import Store, start_bridge, media_kind, http_url, safe_headers
+from core import Store, start_bridge, media_kind, http_url, safe_headers, ONLINE_TIMEOUT, OFFLINE_RETENTION
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -49,6 +49,53 @@ class DiscoveryTests(unittest.TestCase):
         for url in ["file:///secret", "ftp://x/v", "blob:https://x/test", "http://u:p@host/", "https://host:bad/", "not a link"]:
             with self.assertRaises(ValueError):
                 http_url(url)
+
+    def test_temporary_offline_resume_requires_same_session_tab_and_url(self):
+        session = "same-browser-session-123"
+        client = "browser-123"
+        tabs = [{"id": 1, "url": "https://example.com/watch", "title": "视频"}]
+        self.store.sync(client, "Edge", tabs, session)
+        self.store.toggle([f"{client}:1"])
+        self.store.clients[client] -= ONLINE_TIMEOUT + 1
+        visible, _, online_count = self.store.snapshot()
+        self.assertEqual(online_count, 0)
+        self.assertEqual((visible[0]["online"], visible[0]["watching"]), (False, True))
+        self.assertTrue(visible[0]["browser"].startswith("离线 · "))
+        self.assertFalse(self.store.add(self.data)["added"])
+        self.assertEqual(self.store.sync(client, "Edge", tabs, session)["watching"], [1])
+        self.assertEqual(self.store.sync(client, "Edge", [{"id": 1, "url": "https://example.com/other"}], session)["watching"], [])
+
+    def test_session_change_tab_change_and_retention_expiry_clear_watching(self):
+        client = "browser-123"
+        original = [{"id": 1, "url": "https://example.com/watch"}]
+        first = "first-browser-session-123"
+        second = "other-browser-session-123"
+        for changed_tabs, changed_session in [
+            (original, second),
+            ([{"id": 2, "url": "https://example.com/watch"}], first),
+        ]:
+            with self.subTest(tabs=changed_tabs, session=changed_session):
+                store = Store()
+                store.sync(client, "Edge", original, first)
+                store.toggle([f"{client}:1"])
+                self.assertEqual(store.sync(client, "Edge", changed_tabs, changed_session)["watching"], [])
+        store = Store()
+        store.sync(client, "Edge", original, first)
+        store.toggle([f"{client}:1"])
+        store.clients[client] -= OFFLINE_RETENTION + 1
+        self.assertEqual(store.snapshot()[0], [])
+        self.assertEqual(store.sync(client, "Edge", original, first)["watching"], [])
+
+    def test_history_receipt_collision_replaces_missing_download_fields(self):
+        data = {"url": "https://cdn.example.com/movie.mp4", "title": "重新导入"}
+        candidate = self.store.add(data, manual=True)
+        ident = candidate["id"]
+        self.store.items[ident] = {"id": ident, "history": True, "status": "已保存", "path": "old.mp4"}
+        result = self.store.add(data, manual=True)
+        self.assertTrue(result["added"])
+        self.assertEqual(result["id"], ident)
+        self.assertEqual(self.store.items[ident]["url"], data["url"])
+        self.assertNotIn("history", self.store.items[ident])
 
 
 class BridgeTests(unittest.TestCase):

@@ -3,9 +3,10 @@ from pathlib import Path
 import subprocess
 import struct
 import tempfile
+import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import wave
 
 import recorder
@@ -287,6 +288,91 @@ class RecordingIntegrationTests(unittest.TestCase):
             self.assertEqual(self.instance.snapshot()["status"], "已保存", self.instance.snapshot())
             self.assertEqual(len(finalize.call_args.args[1]), 2)
 
+    def test_stop_during_initialization_cancels_without_empty_recovery(self):
+        entered, release = threading.Event(), threading.Event()
+        def slow_geometry(_options):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return {"x": 0, "y": 0, "width": 160, "height": 120}
+        with patch("recorder._geometry", side_effect=slow_geometry):
+            self.instance.start({}, self.folder)
+            self.assertTrue(entered.wait(3))
+            self.assertEqual(self.instance.stop()["status"], "正在保存")
+            release.set()
+            self.instance._thread.join(3)
+        state = self.instance.snapshot()
+        self.assertEqual(state["status"], "已取消", state)
+        self.assertEqual(state["error"], "")
+        self.assertEqual(state["recovery_path"], "")
+        self.assertEqual(list(self.folder.glob(".videocatch-recording-*")), [])
+
+    def test_stop_does_not_hide_first_segment_failure_or_delete_raw_data(self):
+        def failed_segment(_executable, _options, _geometry, recovery, _index):
+            directory = recovery / "segment-0000"
+            directory.mkdir()
+            (directory / "video.mkv").write_bytes(b"recoverable raw video")
+            self.instance.stop()
+            raise RuntimeError("音频设备已断开")
+        with patch.object(self.instance, "_capture_segment", side_effect=failed_segment):
+            self.instance.start({}, self.folder)
+            wait_for(lambda: not self.instance.is_busy)
+        state = self.instance.snapshot()
+        self.assertEqual(state["status"], "失败", state)
+        self.assertIn("音频设备已断开", state["error"])
+        self.assertEqual((Path(state["recovery_path"]) / "segment-0000" / "video.mkv").read_bytes(),
+                         b"recoverable raw video")
+
+    def test_delayed_first_frame_aligns_independent_audio(self):
+        class SyntheticAudio:
+            def __init__(self, _options, folder):
+                self.path = Path(folder) / "microphone.wav"
+                self.error = ""
+                self.started = None
+
+            def start(self, cancelled=None):
+                self.started = time.monotonic()
+                with wave.open(str(self.path), "wb") as output:
+                    output.setparams((1, 2, 48000, 0, "NONE", "not compressed"))
+                    output.writeframes(bytes(33600 * 2))  # 0.7 s before sound.
+                    output.writeframes(struct.pack("<h", 12000) * 24000)
+
+            def check(self):
+                pass
+
+            def stop(self):
+                return [{"path": str(self.path), "started": self.started}]
+
+        real_popen = subprocess.Popen
+        def delayed_video(command, *args, **kwargs):
+            if "-progress" in command:
+                time.sleep(.85)
+            return real_popen(command, *args, **kwargs)
+
+        # The input's realtime filter paces frames before they receive capture
+        # wallclock PTS. FFmpeg's -re instead throttles by input PTS and can
+        # stall when -use_wallclock_as_timestamps supplies epoch timestamps.
+        paced_input = ["-f", "lavfi", "-i", "testsrc2=size=160x120:rate=15,realtime"]
+        with patch("recorder.AudioCapture", SyntheticAudio), patch(
+                "recorder.capture_inputs", return_value=paced_input), patch(
+                "recorder.subprocess.Popen", side_effect=delayed_video), patch.object(
+                self.instance, "_finalize", wraps=self.instance._finalize) as finalize:
+            self.instance.start({"fps": 15, "audio": "microphone", "duration": .4}, self.folder)
+            try:
+                wait_for(lambda: not self.instance.is_busy)
+            except AssertionError:
+                logs = [recorder._log_tail(path) for path in self.folder.rglob("capture.log")]
+                self.fail(f"录制超时：{self.instance.snapshot()}；捕获日志：{logs}")
+        state = self.instance.snapshot()
+        self.assertEqual(state["status"], "已保存", state)
+        segment = finalize.call_args.args[1][0]
+        self.assertGreater(segment["started"] - segment["tracks"][0]["started"], .7)
+        audio = subprocess.run([self.ffmpeg, "-v", "error", "-i", state["path"], "-map", "0:a:0",
+                                "-ac", "1", "-ar", "48000", "-f", "s16le", "-"],
+                               capture_output=True, timeout=20)
+        self.assertEqual(audio.returncode, 0, audio.stderr.decode(errors="replace"))
+        samples = struct.unpack("<" + "h" * (len(audio.stdout) // 2), audio.stdout)
+        self.assertGreater(max(map(abs, samples)), 1000)
+
     def test_odd_screenshot_keeps_exact_pixel_size(self):
         with patch("recorder.capture_inputs", return_value=[
                 "-f", "lavfi", "-i", "testsrc=size=161x123:rate=1"]):
@@ -295,6 +381,27 @@ class RecordingIntegrationTests(unittest.TestCase):
         png = Path(result["path"]).read_bytes()
         self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
         self.assertEqual(struct.unpack(">II", png[16:24]), (161, 123))
+
+    def test_failed_screenshot_does_not_publish_partial_png(self):
+        def failed_run(command, **_kwargs):
+            Path(command[-1]).write_bytes(b"partial PNG data")
+            return Mock(returncode=1, stderr=b"encoder failed")
+        with patch("recorder.subprocess.run", side_effect=failed_run):
+            result = recorder.screenshot({}, self.folder)
+        self.assertEqual(result["status"], "失败")
+        self.assertIn("encoder failed", result["error"])
+        self.assertEqual(list(self.folder.iterdir()), [])
+
+    def test_screenshot_publishes_when_hardlinks_are_unavailable(self):
+        def successful_run(command, **_kwargs):
+            Path(command[-1]).write_bytes(b"synthetic PNG")
+            return Mock(returncode=0, stderr=b"")
+        with patch("recorder.subprocess.run", side_effect=successful_run), patch(
+                "recorder.os.link", side_effect=OSError("hardlinks unavailable")):
+            result = recorder.screenshot({}, self.folder)
+        self.assertEqual(result["status"], "已保存", result)
+        self.assertEqual(Path(result["path"]).read_bytes(), b"synthetic PNG")
+        self.assertEqual(list(self.folder.iterdir()), [Path(result["path"])])
 
     def test_ffmpeg_error_is_reported_and_recovery_retained(self):
         with patch("recorder.capture_inputs", return_value=["-f", "lavfi", "-i", "invalid_fixture"]):
@@ -348,7 +455,7 @@ class RecordingIntegrationTests(unittest.TestCase):
                                    creationflags=recorder.CREATE_NO_WINDOW)
         self.assertEqual(completed.returncode, 0, completed.stderr.decode(errors="replace"))
         geometry = {"x": 0, "y": 0, "width": 160, "height": 120, "display_index": 0}
-        with patch("recorder.sys.platform", "darwin"), patch("recorder._geometry", return_value=geometry), patch(
+        with patch("recorder.sys.platform", "darwin"), patch("recorder.ffmpeg_path", return_value=self.ffmpeg), patch("recorder._geometry", return_value=geometry), patch(
                 "recording_audio_macos.device_inventory", return_value=mac_capture.parse_devices(MAC_DEVICES)), patch(
                 "recorder.capture_inputs", return_value=["-re", "-i", str(source)]), patch("recorder.AudioCapture") as windows_audio:
             self.instance.start({"audio": "microphone", "fps": 15, "duration": .5}, self.folder)

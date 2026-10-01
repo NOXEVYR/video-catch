@@ -8,6 +8,11 @@ import tempfile
 from engine import ffmpeg_path, clean_error
 
 
+def source_stamp(path):
+    stat = Path(path).stat()
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+
+
 def clip_worker(item, folder, events):
     def send(**fields):
         events.put((item["id"], fields))
@@ -16,6 +21,9 @@ def clip_worker(item, folder, events):
         if not ffmpeg:
             raise RuntimeError("未找到 FFmpeg")
         source = str(Path(item["source_path"]).resolve())
+        stamp = source_stamp(source)
+        if item.get('source_stamp') is not None and tuple(item['source_stamp']) != stamp:
+            raise ValueError('源视频在排队后发生变化，请重新打开并选择片段')
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         base = [ffmpeg, "-hide_banner", "-nostdin", "-protocol_whitelist", "file,pipe"]
         probe = subprocess.run(base + ["-i", source], capture_output=True, timeout=30, creationflags=flags)
@@ -33,12 +41,20 @@ def clip_worker(item, folder, events):
         send(status="裁剪中", progress="精确裁剪并编码为 MP4")
         with tempfile.TemporaryDirectory(prefix=".videocatch-clip-", dir=folder) as temporary:
             partial = Path(temporary) / "clip.mp4"
-            command = base + ["-v", "error", "-n", "-ss", str(start), "-i", source, "-t", str(end - start),
+            command = base + ["-progress", "pipe:1", "-v", "error", "-n", "-ss", str(start), "-i", source, "-t", str(end - start),
                               "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "fast",
                               "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", str(partial)]
+            if source_stamp(source) != stamp:
+                raise ValueError('源视频发生变化，已取消导出')
             result = subprocess.run(command, capture_output=True, creationflags=flags)
+            if source_stamp(source) != stamp:
+                raise ValueError('源视频发生变化，已取消导出')
             if result.returncode or not partial.is_file() or not partial.stat().st_size:
                 raise RuntimeError("裁剪失败，源文件未更改；请检查视频格式和保存空间")
+            frames = [int(line[6:].strip()) for line in result.stdout.splitlines()
+                      if line.startswith(b"frame=") and line[6:].strip().isdigit()]
+            if not frames or frames[-1] < 1:
+                raise ValueError("所选时间范围未生成视频帧，请扩大裁剪区间")
             # Windows rename is atomic and refuses an existing destination, including a race.
             if os.name == "nt":
                 os.rename(partial, target)

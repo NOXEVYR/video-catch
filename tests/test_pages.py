@@ -35,6 +35,20 @@ class PageTests(unittest.TestCase):
         self.assertEqual(item["headers"]["User-Agent"], "browser")
         self.assertEqual(len(item["formats"]), 2)
 
+    def test_page_refresh_and_format_upgrade_preserve_user_display_name(self):
+        self.store.toggle(["browser-123:1"])
+        ident = next(iter(self.store.items))
+        self.store.update(ident, title='用户整理的名称_1', display_name='用户整理的名称_1')
+        self.store.sync('browser-123', 'Edge', [{'id': 1, 'url': self.URL + '?spm_id_from=tracking', 'title': '网页更新标题'}])
+        self.assertEqual(self.store.items[ident]['title'], '用户整理的名称_1')
+        self.store.add_page(dict(self.data, formats=[{'url':'https://cdn.test/v.mp4','role':'combined'}]))
+        self.assertEqual(self.store.items[ident]['title'], '用户整理的名称_1')
+        self.assertTrue(self.store.items[ident]['formats'])
+        # Pages that have never been renamed still follow the browser title.
+        self.store.items[ident].pop('display_name')
+        self.store.sync('browser-123', 'Edge', [{'id': 1, 'url': self.URL + '?spm_id_from=tracking', 'title': '再次更新网页标题'}])
+        self.assertEqual(self.store.items[ident]['title'], '再次更新网页标题')
+
     def test_ignore_unwatched_paused_and_stale_navigation(self):
         self.assertFalse(self.store.add_page(self.data)["added"])
         self.store.toggle(["browser-123:1"])

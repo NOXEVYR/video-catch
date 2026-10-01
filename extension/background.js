@@ -4,6 +4,35 @@ const requestHeaders = new Map();
 const recent = new Map();
 let syncing = null;
 const lastScan = new Map();
+const activeRequests = new Set();
+let sessionPromise = null;
+let pausedNow = false;
+
+function browserSession() {
+  if (!sessionPromise) sessionPromise = (async () => {
+    let { browserSession: id } = await chrome.storage.session.get("browserSession");
+    if (!id) {
+      id = crypto.randomUUID();
+      await chrome.storage.session.set({ browserSession: id });
+    }
+    return id;
+  })();
+  return sessionPromise;
+}
+
+function rotateSession() {
+  sessionPromise = (async () => {
+    const id = crypto.randomUUID();
+    await chrome.storage.session.set({ browserSession: id });
+    return id;
+  })();
+  return sessionPromise;
+}
+
+async function badge(text, color = "#168b76") {
+  await chrome.action.setBadgeText({ text });
+  await chrome.action.setBadgeBackgroundColor({ color });
+}
 
 async function scanTab(tabId) {
   if (Date.now() - (lastScan.get(tabId) || 0) < 2000) return;
@@ -21,7 +50,7 @@ async function scanTab(tabId) {
 }
 
 async function settings() {
-  const value = await chrome.storage.local.get(["token", "client", "name"]);
+  const value = await chrome.storage.local.get(["token", "client", "name", "paused"]);
   if (!value.client) {
     value.client = crypto.randomUUID();
     await chrome.storage.local.set({ client: value.client });
@@ -30,11 +59,17 @@ async function settings() {
 }
 async function post(path, body) {
   const config = await settings();
+  if (config.paused || pausedNow) throw new Error("连接已暂停，点击扩展图标恢复");
   if (!config.token) throw new Error("请先粘贴桌面程序中的配对码");
-  const result = await fetch(API + path, {
+  const controller = new AbortController();
+  activeRequests.add(controller);
+  let result;
+  try {
+    result = await fetch(API + path, {
     method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.token}` },
-    body: JSON.stringify({ ...body, client: config.client }), signal: AbortSignal.timeout(3500)
-  });
+    body: JSON.stringify({ ...body, client: config.client }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3500)])
+    });
+  } finally { activeRequests.delete(controller); }
   if (result.status === 401) throw new Error("配对码已失效，请从桌面程序重新复制");
   if (!result.ok) throw new Error(`本机程序返回 ${result.status}`);
   return result.json();
@@ -43,23 +78,29 @@ async function sync() {
   if (syncing) return syncing;
   syncing = (async () => {
     const config = await settings();
+    if (config.paused || pausedNow) {
+      await badge("Ⅱ", "#676078");
+      return { ok: true, paused: true, count: 0 };
+    }
+    const session = await browserSession();
     const tabs = (await chrome.tabs.query({})).filter(t => /^https?:\/\//.test(t.url || "") && !t.incognito)
       .map(t => ({ id: t.id, title: t.title, url: t.url }));
-    const result = await post("/sync", { name: config.name || (/Edg\//.test(navigator.userAgent) ? "Edge" : "Chrome / Chromium"), tabs });
-    if (result.protocol !== 3) throw new Error("桌面程序版本不匹配，请打开 0.3.0 新版拾影再连接");
+    const result = await post("/sync", { name: config.name || (/Edg\//.test(navigator.userAgent) ? "Edge" : "Chrome / Chromium"), tabs, session });
+    if (result.protocol !== 3) throw new Error("桌面程序协议不匹配：请更新拾影桌面程序与浏览器扩展（需要协议 3）");
     await Promise.allSettled((result.watching || []).map(scanTab));
-    await chrome.action.setBadgeText({ text: "ON" });
-    await chrome.action.setBadgeBackgroundColor({ color: "#168b76" });
+    if (pausedNow || (await settings()).paused) return { ok: true, paused: true, count: 0 };
+    await badge("ON");
     return { ok: true, count: tabs.length };
   })().catch(async error => {
-    await chrome.action.setBadgeText({ text: "!" });
+    if (pausedNow || (await settings()).paused) return { ok: true, paused: true, count: 0 };
+    await badge("!", "#d85f58");
     throw error;
   }).finally(() => { syncing = null; });
   return syncing;
 }
 function quietSync() { sync().catch(() => {}); }
-chrome.runtime.onInstalled.addListener(() => { chrome.alarms.create("sync", { periodInMinutes: .5 }); quietSync(); });
-chrome.runtime.onStartup.addListener(() => { chrome.alarms.create("sync", { periodInMinutes: .5 }); quietSync(); });
+chrome.runtime.onInstalled.addListener(() => { chrome.alarms.create("sync", { periodInMinutes: .5 }); rotateSession().then(quietSync); });
+chrome.runtime.onStartup.addListener(() => { chrome.alarms.create("sync", { periodInMinutes: .5 }); rotateSession().then(quietSync); });
 chrome.alarms.onAlarm.addListener(quietSync);
 chrome.tabs.onCreated.addListener(quietSync);
 chrome.tabs.onRemoved.addListener(id => { lastScan.delete(id); quietSync(); });
@@ -73,6 +114,22 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     recent.clear();
     lastScan.clear();
     sync().then(reply, error => reply({ ok: false, error: error.message === "Failed to fetch" ? "未连接：请先打开桌面程序" : error.message }));
+    return true;
+  }
+  if (message.type === "pause") {
+    pausedNow = Boolean(message.paused);
+    if (pausedNow) for (const controller of activeRequests) controller.abort();
+    (async () => {
+      await chrome.storage.local.set({ paused: pausedNow });
+      if (message.paused) {
+        recent.clear();
+        lastScan.clear();
+        await badge("Ⅱ", "#676078");
+        return { ok: true, paused: true };
+      }
+      if (syncing) await syncing.catch(() => {});
+      return sync();
+    })().then(reply, error => reply({ ok: false, paused: Boolean(message.paused), error: error.message }));
     return true;
   }
 });

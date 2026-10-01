@@ -37,7 +37,7 @@ class DownloadTests(unittest.TestCase):
 
     def run_download(self, filename, ident):
         events = queue.Queue()
-        download_worker({"id": ident, "url": f"http://127.0.0.1:{self.server.server_port}/{filename}", "headers": {}}, str(self.root / "output"), events)
+        download_worker({"id": ident, "url": f"http://127.0.0.1:{self.server.server_port}/{filename}", "headers": {}, "proxy": "直连"}, str(self.root / "output"), events)
         values = []
         while not events.empty():
             values.append(events.get()[1])
@@ -72,7 +72,7 @@ class DownloadTests(unittest.TestCase):
         result = store.add_page({"client": "browser-123", "tabId": 1, "url": url,
             "formats": [{"url": f"http://127.0.0.1:{self.server.server_port}/{role}.m4s", "role": role} for role in ["video", "audio"]]})
         events = queue.Queue()
-        download_worker(store.items[result["id"]], str(self.root / "paired"), events)
+        download_worker(dict(store.items[result["id"]], proxy="直连"), str(self.root / "paired"), events)
         while not events.empty():
             fields = events.get()[1]
         self.assertEqual(fields["status"], "已保存", fields)

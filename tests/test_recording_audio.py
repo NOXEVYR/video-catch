@@ -17,12 +17,37 @@ class AudioTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in output.writeframesraw.call_args_list],
                          [b"a" * 200, bytes(1400), b"b" * 200])
 
+    def test_short_adc_gap_is_preserved(self):
+        output = Mock()
+        timing = {"sample_rate": 1000, "channels": 1, "frames": 0, "started": None}
+        _write_timed_audio(output, timing, b"a" * 200, 100, {"input_buffer_adc_time": 50.}, 100.)
+        _write_timed_audio(output, timing, b"b" * 200, 100, {"input_buffer_adc_time": 50.18}, 100.18)
+        self.assertEqual(timing["frames"], 280)
+        self.assertEqual([call.args[0] for call in output.writeframesraw.call_args_list],
+                         [b"a" * 200, bytes(80 * 2), b"b" * 200])
+
+    def test_adc_rounding_within_one_millisecond_does_not_pad(self):
+        output = Mock()
+        timing = {"sample_rate": 1000, "channels": 1, "frames": 0, "started": None}
+        _write_timed_audio(output, timing, b"a" * 200, 100, {"input_buffer_adc_time": 50.}, 100.)
+        _write_timed_audio(output, timing, b"b" * 200, 100, {"input_buffer_adc_time": 50.101}, 100.101)
+        self.assertEqual(timing["frames"], 200)
+        self.assertEqual(output.writeframesraw.call_count, 2)
+
     def test_missing_adc_clock_uses_monotonic_silence(self):
         output = Mock()
         timing = {"sample_rate": 1000, "channels": 1, "frames": 0, "started": None}
         _write_timed_audio(output, timing, b"a" * 200, 100, {}, 100.)
         _write_timed_audio(output, timing, b"b" * 200, 100, {}, 100.8)
         self.assertEqual(timing["frames"], 900)
+
+    def test_callback_arrival_jitter_does_not_create_silence_without_adc(self):
+        output = Mock()
+        timing = {"sample_rate": 1000, "channels": 1, "frames": 0, "started": None}
+        _write_timed_audio(output, timing, b"a" * 200, 100, {}, 100.)
+        _write_timed_audio(output, timing, b"b" * 200, 100, {}, 100.18)
+        self.assertEqual(timing["frames"], 200)
+        self.assertEqual(output.writeframesraw.call_count, 2)
 
     def test_explicit_missing_device_does_not_fall_back(self):
         with self.assertRaisesRegex(ValueError, "已不可用"):

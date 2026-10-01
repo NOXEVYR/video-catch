@@ -12,14 +12,14 @@ import uuid
 import zipfile
 
 from prepare_runtime_macos import architecture, digest, prepare
+from version import VERSION
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "0.5.0"
 PACKAGES = ["yt-dlp", "yt-dlp-ejs", "imageio-ffmpeg", "pyinstaller", "pyobjc-core",
             "pyobjc-framework-Cocoa", "pyobjc-framework-Quartz", "certifi", "requests",
             "urllib3", "mutagen", "brotli", "pycryptodomex", "websockets", "charset-normalizer", "idna"]
 DOCUMENTS = ["README.md", "使用指南.html", "AI接口使用说明.md", "TEST-REPORT.md",
-             "RELEASE-NOTES.md", "SOURCE-PROVENANCE.json", "videocatch_client.py", "collaboration.py", "runtime_paths.py"]
+             "RELEASE-NOTES.md", "MIGRATION.md", "QUALITY-CHECKLIST.md", "LOCAL-CANDIDATE.md", "SOURCE-PROVENANCE.json", "videocatch_client.py", "collaboration.py", "runtime_paths.py", "version.py"]
 
 
 def run(command, **kwargs):

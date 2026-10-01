@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "拾影 VideoCatch · 视频发现",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "icons": {
     "16": "icon16.png",
     "32": "icon32.png",

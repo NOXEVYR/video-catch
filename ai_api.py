@@ -52,6 +52,8 @@ class Api:
                 if not self.enabled.is_set():
                     raise ApiError(403, "AI 接口已关闭")
                 result = self.dispatch(action, data)
+                if action in {"download", "clip", "record_start", "record_stop", "screenshot", "cancel"} and hasattr(self.app, "persist_receipts"):
+                    result["receipt_persisted"] = self.app.persist_receipts()
                 response.put((200, result))
             except ApiError as exc:
                 response.put((exc.status, {"error": exc.message}))
@@ -66,7 +68,9 @@ class Api:
             return {"ok": True, "version": "1", "actions": ["capabilities", "state", "watch", "import", "download", "clip", "cancel",
                     "capture_sources", "record_start", "record_pause", "record_resume", "record_stop", "record_state", "screenshot"],
                     "time_unit": "seconds", "clip_mode": "accurate_h264_aac", "max_concurrent_jobs": 2,
-                    "terminal_statuses": ["已保存", "失败", "已取消"], "poll_interval_seconds": 1,
+                    "session_scope": "online_only", "startup_enablement": "startup_preference_or_explicit_ui_or_unexpired_local_grant",
+                    "history_note": "历史回执不会自动继续；已中断不是成功，已保存文件须复核",
+                    "terminal_statuses": ["已保存", "失败", "已取消", "已中断", "未知"], "poll_interval_seconds": 1,
                     "parameters": {"watch": {"keys": "string[]", "enabled": "boolean"},
                                    "import": {"url": "http(s) URL"},
                                    "download": {"id": "string", "folder?": "absolute path", "proxy?": "string"},
@@ -84,9 +88,10 @@ class Api:
         if action == "state":
             tabs, items, clients = app.store.snapshot()
             # Request headers and signed media URLs stay in the application.
-            fields = ("id", "title", "kind", "status", "progress", "path", "error", "operation", "source_path", "start", "end", "elapsed")
+            fields = ("id", "title", "kind", "status", "progress", "path", "error", "operation", "source_path", "start", "end", "elapsed", "history")
             return {"ok": True, "tabs": tabs, "items": [{k: i.get(k, "") for k in fields} for i in items],
-                    "clients": clients, "paused": app.store.paused, "default_folder": app.folder.get(), "recording": app.recorder.snapshot()}
+                    "clients": clients, "paused": app.store.paused, "default_folder": app.folder.get(), "recording": app.recorder.snapshot(),
+                    "session_id": getattr(app, "session_id", ""), "session_scope": "online_only"}
         if action == "capture_sources":
             refresh = data.get("refresh", False)
             if type(refresh) is not bool:
@@ -126,7 +131,7 @@ class Api:
                 item = app.store.items.get(data.get("id"))
                 if not item:
                     raise ApiError(404, "视频记录不存在")
-                if item.get("operation") in {"clip", "record", "screenshot"}:
+                if item.get("history") or item.get("operation") in {"clip", "record", "screenshot"}:
                     raise ValueError()
                 if item["status"] in BUSY | {"已保存"}:
                     return {"ok": True, "id": item["id"], "status": item["status"], "queued": False}
@@ -148,6 +153,8 @@ class Api:
         value = data.get("folder", self.app.folder.get())
         if not isinstance(value, str) or not value.strip():
             raise ValueError()
+        if not Path(value).expanduser().is_absolute():
+            raise ValueError("保存目录须为绝对路径")
         folder = Path(value).expanduser().resolve()
         folder.mkdir(parents=True, exist_ok=True)
         return str(folder)
@@ -156,7 +163,11 @@ class Api:
         source = data.get("source")
         if not isinstance(source, str) or not source.strip():
             raise ValueError()
+        if not Path(source).expanduser().is_absolute():
+            raise ValueError("视频源须为绝对路径")
         path = Path(source).expanduser().resolve()
+        if getattr(self.app, "file_action_busy", lambda _: False)(path):
+            raise ApiError(409, "该素材正在删除或导出副本，请稍候")
         if not path.is_file() or path.suffix.lower() not in {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".flv", ".ts"}:
             raise ValueError()
         start, end = data.get("start"), data.get("end")
@@ -164,7 +175,8 @@ class Api:
             raise ValueError()
         folder = self.folder(data)
         ident = uuid.uuid4().hex[:20]
-        item = {"id": ident, "operation": "clip", "source_path": str(path), "start": start, "end": end,
+        from clipper import source_stamp
+        item = {"id": ident, "operation": "clip", "source_path": str(path), "source_stamp": source_stamp(path), "start": start, "end": end,
                 "title": path.name, "kind": "本地视频裁剪", "host": "本机", "source": "本机", "status": "排队中",
                 "progress": "等待裁剪", "path": "", "error": "", "url": "", "headers": {}}
         with self.app.store.lock:

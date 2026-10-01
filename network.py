@@ -9,6 +9,8 @@ DIRECT = "直连"
 
 
 def proxy_value(value):
+    if value is not None and not isinstance(value, str):
+        raise ValueError("代理地址格式应为 http://127.0.0.1:端口 或 socks5://127.0.0.1:端口")
     value = (value or "").strip()
     if not value or value == SYSTEM:
         return None

@@ -37,6 +37,7 @@ class QueueTests(unittest.TestCase):
             root = tk.Tk()
             root.withdraw()
             app = App(root, smoke=True)
+            app.proxy.set('直连')  # Local fixture must not inherit system proxy settings.
             def wait_until(predicate, timeout=20):
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:

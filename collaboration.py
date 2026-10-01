@@ -10,17 +10,19 @@ from runtime_paths import distribution_root
 
 
 def settings_path():
-    if sys.platform == "darwin" and "LOCALAPPDATA" not in os.environ:
+    if os.environ.get("VIDEOCATCH_DATA_DIR"):
+        return Path(os.environ["VIDEOCATCH_DATA_DIR"]).expanduser().resolve() / "ai-client.json"
+    if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "VideoCatch" / "ai-client.json"
     return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "VideoCatch" / "ai-client.json"
 
 
-def save_pairing(token, port=18796):
+def save_pairing(token, port=18796, path=None):
     if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32}", token):
         raise ValueError("无效的配对码")
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError("无效的本机端口")
-    path = settings_path()
+    path = Path(path) if path is not None else settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
@@ -48,6 +50,9 @@ def collaboration_prompt():
     command = "& " + powershell_quote(client) if frozen else "& " + powershell_quote(sys.executable) + " " + powershell_quote(client)
     if mac:
         command = shlex.quote(str(client)) if frozen else shlex.quote(sys.executable) + " " + shlex.quote(str(client))
+    if os.environ.get("VIDEOCATCH_DATA_DIR"):
+        quote = shlex.quote if mac else powershell_quote
+        command += " --data-dir " + quote(str(settings_path().parent))
     shell = "macOS 终端（zsh/bash，保留引号）" if mac else "PowerShell（路径含空格/中文，请保留 & 和单引号）"
     return f"""请通过这台 {'macOS' if mac else 'Windows'} 电脑上的「拾影 VideoCatch」协助我下载、录制、截图或截取视频。
 拾影已开启本次 AI 协作并完成本机配对。你需要能执行本机命令；如果只有云端/网页聊天工具，请说明无法访问这台电脑，不要假装已连接。
@@ -80,6 +85,7 @@ def collaboration_prompt():
 5. 默认保存到拾影主窗口目录；精确裁剪另存 H.264/AAC MP4，会重新编码，源文件不变。无法绕过 DRM 或登录访问限制。
 6. 仅按我的明确要求开始屏幕、声音或摄像头录制，不要擅自打开麦克风或摄像头。录制时保留浮动停止工具条；暂停/停止使用返回的 id，停止后轮询直到「已保存」。桌面画笔适用于全屏/区域录制，不能烧录到独立窗口或摄像头画面。
 
-若未启动、接口关闭或配对过期，请提示我打开拾影并再次点击「开启协作并复制」。重新打开拾影后需再次点击；取消「允许 AI 协作」可关闭访问，已提交任务需单独取消。
+这是在线会话接口：客户端不会自行启动或启用服务。若未启动、接口关闭或配对过期，请提示我打开拾影并再次点击「开启协作并复制」。默认启动会自动开启本机 AI 协作并更新配对文件；用户可在「设置与恢复」关闭自动开启，也可选择 24 小时限期授权。撤销协作会同时关闭自动开启，限期授权到期后失效。每次启动仍轮换配对码；读取设置的客户端随授权恢复使用新码，旧码无效。
+state.session_id 区分当前在线会话；history=true 的任务是历史回执，重启时未完成的任务标为「已中断」，不会自动重试。历史“已保存”只说明上次报告成功，仍应检查文件。不要把超时或中断当作完成，也不要把历史回执当作当前正在运行的任务。
 详细本地接口文档：{base / 'AI接口使用说明.md'}
 """

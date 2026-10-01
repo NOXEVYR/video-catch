@@ -71,3 +71,80 @@ test('reused XHR cannot associate another response with a previous video', () =>
   xhr.listeners.get('load')();
   assert.equal(c.scanPage().formats.length, 2);
 });
+
+function backgroundFixture(shared = {local:{token:'paired-token'}, session:{}}, protocol = 3) {
+  const listeners = {};
+  const calls = [];
+  const event = name => ({addListener: listener => {listeners[name] = listener;}});
+  const store = area => ({
+    get: async keys => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter(k => k in shared[area]).map(k => [k, shared[area][k]])),
+    set: async values => Object.assign(shared[area], values),
+  });
+  const chrome = {
+    storage:{local:store('local'), session:store('session')},
+    tabs:{query:async()=>[{id:7,title:'视频',url:'https://example.com/watch',incognito:false},
+      {id:8,title:'无痕',url:'https://example.com/private',incognito:true}],get:async()=>({}) ,
+      onCreated:event('created'),onRemoved:event('removed'),onUpdated:event('updated')},
+    action:{setBadgeText:async()=>{},setBadgeBackgroundColor:async()=>{}},
+    alarms:{create:()=>{},onAlarm:event('alarm')},
+    runtime:{onInstalled:event('installed'),onStartup:event('startup'),onMessage:event('message')},
+    webRequest:{onBeforeSendHeaders:event('beforeHeaders'),onHeadersReceived:event('headers'),
+      onCompleted:event('completed'),onErrorOccurred:event('error')},
+    scripting:{executeScript:async()=>[]},
+  };
+  const context = {chrome, navigator:{userAgent:'Chrome'}, crypto:{randomUUID:()=>`session-id-${Math.random().toString(36).slice(2)}-123456789`},
+    Date, Map, Promise, AbortController, AbortSignal, importScripts:()=>{}, classify:()=>null, scanPage:()=>{},
+    fetch:async (url, options)=>{calls.push({url, body:JSON.parse(options.body)});return {ok:true,status:200,json:async()=>({protocol,watching:[]})};}};
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(require.resolve('../extension/background.js'),'utf8'),context);
+  return {context, listeners, calls, shared};
+}
+
+test('sync uses fixed loopback, skips incognito, and retains one browser session across worker restarts', async () => {
+  const first = backgroundFixture();
+  await vm.runInContext('sync()', first.context);
+  assert.equal(first.calls[0].url, 'http://127.0.0.1:18796/sync');
+  assert.deepEqual(first.calls[0].body.tabs.map(t=>t.id), [7]);
+  const prior = first.calls[0].body.session;
+  const restartedWorker = backgroundFixture(first.shared);
+  await vm.runInContext('sync()', restartedWorker.context);
+  assert.equal(restartedWorker.calls[0].body.session, prior);
+  restartedWorker.listeners.startup();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.notEqual(restartedWorker.shared.session.browserSession, prior);
+});
+
+test('pause stops sync requests and resume sends a fresh sync', async () => {
+  const fixture = backgroundFixture();
+  const message = (type, paused) => new Promise(resolve => fixture.listeners.message({type,paused},{},resolve));
+  await message('pause', true);
+  await vm.runInContext('sync()', fixture.context);
+  assert.equal(fixture.calls.length, 0);
+  assert.equal(fixture.shared.local.paused, true);
+  await message('pause', false);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(fixture.shared.local.paused, false);
+});
+
+test('resume without a pairing token reports unpaused state for popup recovery', async () => {
+  const fixture = backgroundFixture({local:{}, session:{}});
+  const message = paused => new Promise(resolve => fixture.listeners.message({type:'pause',paused},{},resolve));
+  assert.equal((await message(true)).paused, true);
+  const resumed = await message(false);
+  assert.equal(resumed.ok, false);
+  assert.equal(resumed.paused, false);
+  assert.match(resumed.error, /配对码/);
+});
+
+test('protocol mismatch guidance and popup disclose current behavior', async () => {
+  const fixture = backgroundFixture(undefined, 2);
+  await assert.rejects(vm.runInContext('sync()', fixture.context), /协议 3/);
+  const html = fs.readFileSync(require.resolve('../extension/popup.html'),'utf8');
+  const install = fs.readFileSync(require.resolve('../extension/安装说明.txt'),'utf8');
+  const manifest = require('../extension/manifest.json');
+  for (const detail of ['30 秒','非无痕 HTTP(S)','ID、标题和网址','127.0.0.1:18796','暂停连接']) {
+    assert.ok(html.includes(detail), detail);
+  }
+  assert.ok(install.includes(`扩展 ${manifest.version}`));
+  assert.ok(install.includes('协议 3'));
+});

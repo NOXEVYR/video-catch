@@ -98,7 +98,8 @@ class AiTests(unittest.TestCase):
         with patch.dict(os.environ, {"LOCALAPPDATA": str(self.folder)}), \
                 patch.object(self.root, "clipboard_clear"), \
                 patch.object(self.root, "clipboard_append") as clipboard:
-            self.app.collaboration_button.invoke()
+            panel = self.app.open_ai_collaboration()
+            panel.copy_guide_button.invoke()
             prompt = clipboard.call_args.args[0]
             self.assertNotIn(self.app.bridge.token, prompt)
             self.assertIn(str(Path(sys.executable)), prompt)
@@ -128,7 +129,7 @@ class AiTests(unittest.TestCase):
             save_pairing("x" * 32, self.app.bridge.server_port)
             status, result = call("state")
             self.assertEqual(result["code"], "pairing_expired")
-            self.app.collaboration_button.invoke()
+            panel.copy_guide_button.invoke()
             self.assertEqual(call("state")[0], 0)
 
     def test_handoff_failure_does_not_enable_interface(self):
@@ -179,7 +180,7 @@ class AiTests(unittest.TestCase):
             media = self.app.store.add({"client": "browser-123", "tabId": 1, "url": f"http://127.0.0.1:{server.server_port}/source.mp4?signature=private"})
             ident = media["id"]
             self.assertNotIn("signature=private", json.dumps(self.post("state")[1]))
-            self.assertTrue(self.post("download", {"id": ident, "proxy": ""})[1]["queued"])
+            self.assertTrue(self.post("download", {"id": ident, "proxy": "直连"})[1]["queued"])
             downloaded = self.completed(ident)
             self.assertEqual(downloaded["status"], "已保存", downloaded)
             self.assertEqual(hashlib.sha256(Path(downloaded["path"]).read_bytes()).hexdigest(), original)
@@ -204,6 +205,23 @@ class AiTests(unittest.TestCase):
         status, job = self.post("clip", {"source": str(source), "start": 0, "end": 99})
         self.assertEqual(status, 200)
         self.assertEqual(self.completed(job["id"])["status"], "失败")
+
+    def test_invalid_proxy_returns_400_without_stopping_api_pump(self):
+        status, result = self.post("download", {"id": "missing", "proxy": 123})
+        self.assertEqual(status, 400, result)
+        self.assertEqual(self.post("state")[0], 200)
+
+    def test_clip_with_no_video_frames_is_not_saved(self):
+        source = self.fixture()
+        events = queue.Queue()
+        clip_worker({"id": "no-frames", "source_path": str(source), "start": 0.101, "end": 0.102},
+                    str(self.folder), events)
+        messages = []
+        while not events.empty():
+            messages.append(events.get()[1])
+        self.assertEqual(messages[-1]["status"], "失败")
+        self.assertIn("视频帧", messages[-1]["error"])
+        self.assertFalse((self.folder / "clip-no-frames.mp4").exists())
 
     def test_cancel_queued_clip_and_timeout_does_not_run_later(self):
         source = self.fixture()

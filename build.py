@@ -9,12 +9,12 @@ import subprocess
 import sys
 import zipfile
 
-import imageio_ffmpeg
+from version import VERSION
+from windows_version import resource
 
 ROOT = Path(__file__).resolve().parent
 WORK = Path(os.environ.get("VIDEOCATCH_BUILD_DIR", ROOT / ".build"))
 RELEASE = ROOT / "releases"
-VERSION = "0.5.0"
 DIST = RELEASE / f"VideoCatch-v{VERSION}"
 
 
@@ -23,31 +23,48 @@ def digest(path):
 
 
 def main():
+    # PyInstaller can silently omit tkinter when this check fails and still
+    # report a successful build. Such a package cannot start the desktop app.
+    import tkinter
+    try:
+        tkinter.Tcl()
+    except tkinter.TclError as error:
+        raise RuntimeError("Tcl/Tk 初始化失败，停止打包，避免生成无法启动的桌面包") from error
     RELEASE.mkdir(exist_ok=True)
     tools = WORK / "tools"
     tools.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), tools / "ffmpeg.exe")
+    if not (tools / "ffmpeg.exe").is_file():
+        import imageio_ffmpeg
+        shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), tools / "ffmpeg.exe")
+    for filename in ("VideoCatch.exe", "VideoCatchAI.exe"):
+        (WORK / (filename + ".version.txt")).write_text(resource(filename), encoding="utf-8")
     subprocess.run([sys.executable, str(ROOT / "prepare_runtime.py")], check=True)
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", "VideoCatch",
-                    "--icon", str(ROOT / "assets" / "videocatch.ico"), "--add-data", f"{ROOT / 'assets'};assets",
+                    "--icon", str(ROOT / "assets" / "videocatch.ico"), "--version-file", str(WORK / "VideoCatch.exe.version.txt"), "--add-data", f"{ROOT / 'assets'};assets",
                     "--distpath", str(DIST), "--workpath", str(WORK / "pyinstaller"), "--specpath", str(WORK),
                     "--collect-all", "yt_dlp", "--collect-all", "yt_dlp_ejs", "--collect-all", "pyaudiowpatch", "--hidden-import", "_portaudiowpatch", "--exclude-module", "imageio_ffmpeg", "--add-binary", f"{tools / 'ffmpeg.exe'};tools", "--add-binary", f"{tools / 'deno.exe'};tools",
-                    str(ROOT / "app.py")], check=True, cwd=ROOT)
+                    str(ROOT / "launcher.py")], check=True, cwd=ROOT)
     target = DIST / "VideoCatch"
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console",
                     "--name", "VideoCatchAI", "--icon", str(ROOT / "assets" / "videocatch.ico"),
+                    "--version-file", str(WORK / "VideoCatchAI.exe.version.txt"),
                     "--distpath", str(target), "--workpath", str(WORK / "client"), "--specpath", str(WORK),
                     str(ROOT / "videocatch_client.py")], check=True, cwd=ROOT)
     shutil.copytree(ROOT / "extension", target / "extension", dirs_exist_ok=True)
     shutil.copytree(ROOT / "assets", target / "assets", dirs_exist_ok=True)
-    for name in ["README.md", "使用指南.html", "TEST-REPORT.md", "AI接口使用说明.md", "videocatch_client.py", "collaboration.py", "runtime_paths.py", "SOURCE-PROVENANCE.json"]:
+    for name in ["README.md", "使用指南.html", "TEST-REPORT.md", "AI接口使用说明.md", "RELEASE-NOTES.md", "MIGRATION.md", "QUALITY-CHECKLIST.md", "LOCAL-CANDIDATE.md", "videocatch_client.py", "collaboration.py", "runtime_paths.py", "version.py", "SOURCE-PROVENANCE.json"]:
         shutil.copy2(ROOT / name, target / name)
     licenses = target / "licenses"
     licenses.mkdir(exist_ok=True)
     shutil.copytree(ROOT / "licenses", licenses, dirs_exist_ok=True)
+    if (WORK / "licenses").is_dir():
+        shutil.copytree(WORK / "licenses", licenses, dirs_exist_ok=True)
     packages = ["yt-dlp", "yt-dlp-ejs", "imageio-ffmpeg", "pyinstaller", "PyAudioWPatch", "certifi", "requests", "urllib3", "mutagen", "brotli", "pycryptodomex", "websockets", "charset-normalizer", "idna"]
     for package in packages:
-        dist = metadata.distribution(package)
+        try:
+            dist = metadata.distribution(package)
+        except metadata.PackageNotFoundError:
+            continue  # Offline reconstruction supplies verified original license files.
         for file in dist.files or []:
             if "license" in file.name.lower() or "copying" in file.name.lower():
                 src = Path(dist.locate_file(file))
@@ -73,9 +90,23 @@ def main():
     (licenses / "FFmpeg-license.txt").write_bytes(subprocess.check_output([str(tools / "ffmpeg.exe"), "-L"], stderr=subprocess.STDOUT))
     files = {str(p.relative_to(target)).replace("\\", "/"): {"bytes": p.stat().st_size, "sha256": digest(p)}
              for p in target.rglob("*") if p.is_file() and p.name != "runtime-manifest.json"}
-    source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    source_dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))
-    manifest = {"version": VERSION, "source_commit": source_commit, "source_dirty": source_dirty, "python": sys.version.split()[0], "components": {**{p: metadata.version(p) for p in packages}, "deno": "2.9.6"}, "files": files}
+    try:
+        source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+        source_dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))
+    except subprocess.CalledProcessError:
+        source_commit, source_dirty = "source-archive-with-local-changes", True
+    provenance = json.loads((WORK / "offline-provenance.json").read_text(encoding="utf-8")) if (WORK / "offline-provenance.json").is_file() else {}
+    components = {}
+    for package in packages:
+        try:
+            components[package] = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            components[package] = provenance["components"][package]
+    source_files = {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(ROOT.rglob('*')) if p.is_file()
+                    and not set(p.relative_to(ROOT).parts) & {'releases', '.build', '__pycache__', '.git', 'tools'} and p.suffix != '.pyc'}
+    manifest = {"version": VERSION, "source_commit": source_commit, "source_dirty": source_dirty,
+                "source_tree_sha256": hashlib.sha256(json.dumps(source_files, sort_keys=True).encode()).hexdigest(),
+                "python": sys.version.split()[0], "components": {**components, "deno": "2.9.6"}, "offline_dependency_provenance": provenance, "files": files}
     (target / "runtime-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     archive = RELEASE / f"VideoCatch-v{VERSION}-Windows-x64.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:

@@ -33,6 +33,18 @@ class RuntimePathsTests(unittest.TestCase):
         with patch.object(sys, 'platform', 'win32'), patch.object(sys, 'frozen', True, create=True), patch.object(sys, 'executable', str(Path.cwd()/'fixture/VideoCatch.exe')):
             self.assertEqual(distribution_root(), Path.cwd()/'fixture')
 
+    def test_mac_pairing_ignores_windows_environment(self):
+        from local_state import default_data_dir
+        with patch.object(sys, 'platform', 'darwin'), patch.dict(os.environ, {'LOCALAPPDATA': '/wrong'}, clear=True), patch('pathlib.Path.home', return_value=Path('/fixture')):
+            self.assertEqual(settings_path().parent, default_data_dir())
+
+    def test_handoff_includes_isolated_data_directory(self):
+        with tempfile.TemporaryDirectory(prefix="state O'Brien ") as folder:
+            with patch.dict(os.environ, {'VIDEOCATCH_DATA_DIR': folder}):
+                prompt = collaboration_prompt()
+            self.assertIn('--data-dir', prompt)
+            self.assertIn(str(Path(folder).resolve()).replace("'", "''"), prompt)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -103,6 +103,13 @@ def panel_size(screen_width, screen_height, scale, content_height):
 class RecordingPanel:
     def __init__(self, app):
         self.app = app
+        from capture_preferences import CapturePreferences
+        state = getattr(app, "local_state", None)
+        self.capture_preferences = CapturePreferences(getattr(state, "data_dir", "."),
+                                                      enabled=bool(state and state.enabled))
+        saved = self.capture_preferences.load()
+        self.record_mode = saved["record_mode"]
+        self.screenshot_mode = saved["screenshot_mode"]
         self.window = None
         self.selector = None
         self.region = None
@@ -115,6 +122,8 @@ class RecordingPanel:
         self._timer = None
         self._screenshot_timer = None
         self._screenshot_restore = False
+        self._recording_restore = False
+        self._restore_main = False
         self._generation = 0
         self.vars = {name: tk.StringVar(app.root, value=value) for name, value in
                      dict(mode="全屏录制", audio="不录声音", quality="均衡", fps="30", duration="0",
@@ -122,10 +131,19 @@ class RecordingPanel:
         self.vars["cursor"] = tk.BooleanVar(app.root, value=True)
         self.vars["overlay"] = tk.BooleanVar(app.root, value=False)
         self.vars["minimize"] = tk.BooleanVar(app.root, value=True)
+        for key in ("audio", "quality", "fps", "duration", "countdown", "profile"):
+            self.vars[key].set(saved[key])
+        for key in ("cursor", "overlay", "minimize"):
+            self.vars[key].set(saved[key])
+        self.vars["mode"].set(self.record_mode)
         self.status = tk.StringVar(app.root, value="准备就绪")
         self.device_status = tk.StringVar(app.root, value="打开面板后检测设备")
         self.region_status = tk.StringVar(app.root, value="尚未框选区域")
         self.detail = tk.StringVar(app.root, value="录制与截图保存到主窗口所选文件夹。")
+        if self.capture_preferences.warnings:
+            warning = self.capture_preferences.warnings[-1]
+            self.detail.set(warning)
+            self.app.notice.set(warning)
         self._settings = []
 
     @property
@@ -156,8 +174,10 @@ class RecordingPanel:
         self._generation += 1
         win = self.window = tk.Toplevel(self.app.root)
         win.withdraw()
-        win.title("拾影 · 录屏与截图")
         win.configure(bg=BG)
+        from surface_ui import header
+        win.title("拾影 · 采集设置")
+        header(win, "采集设置", "调整画质、声音与采集范围。日常录屏和截图使用快捷工具栏。", app=self.app)
         win.protocol("WM_DELETE_WINDOW", self.close)
         # Scroll the controls on smaller displays; actions remain pinned below.
         footer = ttk.Frame(win, padding=(20, 12))
@@ -188,7 +208,7 @@ class RecordingPanel:
 
         win.bind("<MouseWheel>", scroll_content)
         body.columnconfigure(1, weight=1)
-        ttk.Label(body, text="录下眼前，留下灵感", font=("Microsoft YaHei UI", 19, "bold")).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(body, text="录屏与截图参数", font=("Microsoft YaHei UI", 12, "bold")).grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(body, textvariable=self.status, foreground=ACCENT, font=("Microsoft YaHei UI", 11, "bold")).grid(row=1, column=0, columnspan=3, sticky="w", pady=(5, 15))
         self._settings = []
 
@@ -313,14 +333,13 @@ class RecordingPanel:
         self._apply_devices()
 
     def _apply_devices(self):
-        if not widget_exists(self.window):
-            return
         inventory = self.inventory
-        for key, field, box, labels in (("cameras", "camera", self.camera_box, lambda d: d["name"]),
-                                         ("systems", "system", self.system_box, device_label),
-                                         ("microphones", "microphone", self.microphone_box, device_label)):
+        for key, field, box_name, labels in (("cameras", "camera", "camera_box", lambda d: d["name"]),
+                                              ("systems", "system", "system_box", device_label),
+                                              ("microphones", "microphone", "microphone_box", device_label)):
             choices = [labels(d) for d in inventory.get(key, ())]
-            box.configure(values=choices)
+            if widget_exists(self.window):
+                getattr(self, box_name).configure(values=choices)
             if self.vars[field].get() not in choices:
                 default = next((labels(d) for d in inventory.get(key, ()) if d.get("default")), None)
                 self.vars[field].set(default or (choices[0] if choices else ""))
@@ -337,7 +356,8 @@ class RecordingPanel:
             from capture_native import list_windows
             self.windows = list_windows()
             choices = [window_label(w) for w in self.windows]
-            self.window_box.configure(values=choices)
+            if widget_exists(self.window):
+                self.window_box.configure(values=choices)
             if self.vars["window"].get() not in choices:
                 self.vars["window"].set(choices[0] if choices else "")
         except (OSError, RuntimeError, ValueError):
@@ -415,6 +435,8 @@ class RecordingPanel:
                 except tk.TclError:
                     pass
             self.app.start_recording(options)
+            self._recording_restore = True
+            self._restore_main = minimized
         except (ValueError, RuntimeError, OSError) as error:
             if minimized:
                 self.app.root.deiconify()
@@ -491,9 +513,18 @@ class RecordingPanel:
     def refresh(self):
         self._read_devices()
         self._restore_after_screenshot()
+        snapshot = self.app.recorder.snapshot() or {}
+        if (self._recording_restore and not is_busy(self.app.recorder)
+                and snapshot.get("status") in {"已保存", "失败", "已取消"}
+                and not getattr(self.app, "exit_after_capture", False)):
+            self._recording_restore = False
+            if self._restore_main:
+                self.app.root.deiconify()
+            if widget_exists(self.window):
+                self.window.deiconify()
+            self._restore_main = False
         if not self.visible:
             return
-        snapshot = self.app.recorder.snapshot() or {}
         status = snapshot.get("status") or "准备就绪"
         busy = is_busy(self.app.recorder)
         countdown = self._pending_options is not None
@@ -526,8 +557,32 @@ class RecordingPanel:
             self.refresh()
             self._timer = self.app.root.after(250, self._tick)
 
+    def save_preferences(self):
+        bar = getattr(self.app, "capture_bar", None)
+        current_mode = self.vars["mode"].get()
+        if bar is not None and getattr(bar, "mode", None) == "screenshot":
+            if current_mode in ("全屏录制", "区域录制", "窗口录制"):
+                self.screenshot_mode = current_mode
+            elif current_mode == "仅摄像头":
+                self.record_mode = current_mode
+        else:
+            self.record_mode = current_mode
+        values = {key: self.vars[key].get() for key in
+                  ("audio", "quality", "fps", "duration", "cursor", "overlay", "countdown", "minimize", "profile")}
+        values.update(record_mode=self.record_mode, screenshot_mode=self.screenshot_mode)
+        previous_warnings = len(self.capture_preferences.warnings)
+        saved = self.capture_preferences.save(values)
+        if len(self.capture_preferences.warnings) > previous_warnings:
+            warning = self.capture_preferences.warnings[-1]
+            self.detail.set(warning)
+            self.app.notice.set(warning)
+        return saved
+
     def close(self):
+        self.save_preferences()
         self._generation += 1
+        self._recording_restore = False
+        self._restore_main = False
         self.cancel_countdown()
         self._screenshot_restore = False
         cancel_timer(self.app.root, self._screenshot_timer)

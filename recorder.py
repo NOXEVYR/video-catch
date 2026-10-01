@@ -2,16 +2,19 @@
 from copy import deepcopy
 from datetime import datetime
 import math
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
 
 from engine import ffmpeg_path
-from recording_audio import AudioCapture, audio_inventory
+from recording_audio import AudioCapture, AudioCaptureCancelled, audio_inventory
 
 
 BUSY_STATES = {"准备录制", "录制中", "录制暂停", "正在保存"}
@@ -131,16 +134,22 @@ def capture_inputs(options, geometry):
     return args
 
 
-def _filters(options, geometry):
+def _filters(options, geometry, timed_video=False):
     width = (geometry["width"] + 1) // 2 * 2
     height = (geometry["height"] + 1) // 2 * 2
     crop = geometry.get("crop")
     crop_filter = (f"crop={crop['width']}:{crop['height']}:{crop['x']}:{crop['y']}:exact=1," if crop else "")
-    base = (f"[0:v]{crop_filter}scale={width}:{height}:force_original_aspect_ratio=decrease,"
+    # With -copyts the first input retains its capture wallclock PTS. Observe
+    # only its first frame, then reset the output timeline independently.
+    timing = ("[0:v]split[video_source][timing_source];"
+              "[timing_source]select='eq(n,0)',showinfo,nullsink;" if timed_video else "")
+    source = "[video_source]setpts=PTS-STARTPTS," if timed_video else "[0:v]"
+    base = (timing + f"{source}{crop_filter}scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={options['fps']}[base]")
     if options["camera"] and options["mode"] != "camera":
         overlay_w, overlay_h = max(2, width // 4 // 2 * 2), max(2, height // 4 // 2 * 2)
-        base += (f";[1:v]scale={overlay_w}:{overlay_h}:force_original_aspect_ratio=decrease,"
+        camera_source = "[1:v]setpts=PTS-STARTPTS," if timed_video else "[1:v]"
+        base += (f";{camera_source}scale={overlay_w}:{overlay_h}:force_original_aspect_ratio=decrease,"
                  "setsar=1[cam];[base][cam]overlay=main_w-overlay_w-8:main_h-overlay_h-8"
                  ":eof_action=pass[v]")
     else:
@@ -156,6 +165,21 @@ def _log_tail(path):
             return stream.read().decode("utf-8", errors="replace")[-1600:]
     except OSError:
         return ""
+
+
+def _first_video_epoch(path):
+    """Read the capture input's first-frame PTS, not progress delivery time."""
+    with open(path, "rb") as stream:
+        for _ in range(10000):
+            line = stream.readline()
+            if not line:
+                break
+            if b"showinfo" not in line or not re.search(rb"\bn:\s*0\b", line):
+                continue
+            match = re.search(rb"\bpts_time:([0-9]+(?:\.[0-9]+)?)", line)
+            if match:
+                return float(match[1])
+    raise RuntimeError("无法读取首帧采集时间；原始录制文件已保留")
 
 
 def _run(command, log, timeout=120):
@@ -254,6 +278,8 @@ def screenshot(options, folder):
         destination = Path(folder).expanduser().resolve()
         destination.mkdir(parents=True, exist_ok=True)
         path = destination / f"截图_{datetime.now():%Y%m%d_%H%M%S}_{ident}.png"
+        staging_dir = Path(tempfile.mkdtemp(prefix=".videocatch-screenshot-", dir=destination))
+        staging = staging_dir / "capture.png"
         command = [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-n"]
         command += capture_inputs(options, geometry)
         if options["camera"] and options["mode"] != "camera":
@@ -263,14 +289,37 @@ def screenshot(options, folder):
             if geometry.get("crop"):
                 crop = geometry["crop"]
                 command += ["-vf", f"crop={crop['width']}:{crop['height']}:{crop['x']}:{crop['y']}:exact=1"]
-        command += ["-frames:v", "1", "-update", "1", str(path)]
+        command += ["-frames:v", "1", "-update", "1", str(staging)]
         completed = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, timeout=20, creationflags=CREATE_NO_WINDOW)
-        if completed.returncode or not path.is_file() or not path.stat().st_size:
+        if completed.returncode or not staging.is_file() or not staging.stat().st_size:
             raise RuntimeError(completed.stderr.decode("utf-8", errors="replace")[-1600:] or "截图失败")
+        try:
+            os.link(staging, path)
+        except FileExistsError:
+            raise RuntimeError("目标截图已存在，未覆盖原文件")
+        except OSError:
+            # Some removable/network filesystems cannot create hard links.
+            # Exclusive creation still protects an existing user file.
+            target_created = False
+            try:
+                with open(staging, "rb") as source, open(path, "xb") as target:
+                    target_created = True
+                    shutil.copyfileobj(source, target)
+            except Exception:
+                if target_created:
+                    path.unlink()
+                raise
         result.update(status="已保存", path=str(path))
     except Exception as exc:
         result["error"] = str(exc)
+    finally:
+        if "staging_dir" in locals():
+            try:
+                staging.unlink(missing_ok=True)
+                staging_dir.rmdir()
+            except OSError:
+                pass
     return result
 
 
@@ -356,6 +405,7 @@ class Recorder:
 
     def _worker(self, folder):
         recovery = None
+        segments = []
         try:
             options = self.snapshot()["options"]
             executable = _ffmpeg()
@@ -372,7 +422,6 @@ class Recorder:
             recovery.mkdir()
             with self._lock:
                 self._state["recovery_path"] = str(recovery)
-            segments = []
             sequence = 0
             while self._requested() != "stop":
                 if self._requested() == "pause":
@@ -384,6 +433,9 @@ class Recorder:
                 if segment:
                     segments.append(segment)
             if not segments:
+                if self._requested() == "stop":
+                    self._cancel_unstarted(recovery, destination, ident)
+                    return
                 raise RuntimeError("已停止，尚未产生可保存的画面")
             with self._lock:
                 self._state["status"] = "正在保存"
@@ -407,6 +459,18 @@ class Recorder:
             with self._lock:
                 self._freeze_clock()
 
+    def _cancel_unstarted(self, recovery, destination, ident):
+        warning = ""
+        if recovery is not None and recovery.exists():
+            try:
+                if not any(path.is_file() and path.stat().st_size for path in recovery.rglob("*")):
+                    _cleanup_recovery(recovery, destination, ident)
+            except (OSError, RuntimeError) as exc:
+                warning = "取消后恢复文件未清理：" + str(exc)
+        with self._lock:
+            self._state.update(status="已取消", error="", warning=warning,
+                               recovery_path=str(recovery) if recovery is not None and recovery.exists() else "")
+
     def _capture_segment(self, executable, options, geometry, recovery, index):
         directory = recovery / f"segment-{index:04d}"
         directory.mkdir()
@@ -420,13 +484,22 @@ class Recorder:
             embedded_audio = geometry.get("mac_plan", {}).get("audio_labels", [])
             if options["audio"] != "none" and sys.platform != "darwin":
                 audio = AudioCapture(options, directory)
-                audio.start(cancelled=lambda: self._requested() == "stop")
+                try:
+                    audio.start(cancelled=lambda: self._requested() == "stop")
+                except AudioCaptureCancelled:
+                    if self._requested() == "stop":
+                        return None
+                    raise
             if self._requested() != "record" or generation != self._generation:
                 return None
-            command = [executable, "-hide_banner", "-loglevel", "warning", "-n",
+            timed_video = bool(audio)
+            command = [executable, "-hide_banner", "-loglevel", "info" if timed_video else "warning", "-n"]
+            if timed_video:
+                command += ["-copyts", "-use_wallclock_as_timestamps", "1"]
+            command += [
                        "-stats_period", "0.2", "-progress", "pipe:1"]
             command += capture_inputs(options, geometry)
-            filters = _filters(options, geometry)
+            filters = _filters(options, geometry, timed_video=timed_video)
             if embedded_audio:
                 from recording_audio_macos import audio_filter
                 filters += ";" + audio_filter(embedded_audio)
@@ -441,6 +514,7 @@ class Recorder:
                         "-pix_fmt", "yuv420p", "-g", str(options["fps"] * 2), str(raw)]
             log_stream = open(log, "wb")
             video_started = time.monotonic()
+            clock_offset = video_started - time.time()
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                        stderr=log_stream, creationflags=CREATE_NO_WINDOW)
 
@@ -493,7 +567,13 @@ class Recorder:
                 raise RuntimeError("录制保存分段失败：" + _log_tail(log))
             if not frames[0] or not raw.is_file() or not raw.stat().st_size:
                 return None
-            return {"path": raw, "tracks": tracks, "started": video_started, "embedded_audio": bool(embedded_audio)}
+            if timed_video:
+                first_frame = _first_video_epoch(log) + clock_offset
+                if not video_started - 2 <= first_frame <= time.monotonic() + 2:
+                    raise RuntimeError("首帧时间超出录制区间；原始录制文件已保留")
+            else:
+                first_frame = video_started
+            return {"path": raw, "tracks": tracks, "started": first_frame, "embedded_audio": bool(embedded_audio)}
         finally:
             try:
                 if process and process.poll() is None:

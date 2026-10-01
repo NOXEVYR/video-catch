@@ -7,6 +7,7 @@ import sys
 from urllib.request import Request, build_opener, ProxyHandler
 from urllib.error import HTTPError, URLError
 from collaboration import settings_path, save_pairing
+from version import VERSION
 
 
 def fail(code, message, status=None):
@@ -19,12 +20,16 @@ def fail(code, message, status=None):
 
 def main():
     parser = argparse.ArgumentParser(description="拾影 AI 客户端；推荐先在拾影点击「开启协作并复制」，再调用 state。")
+    parser.add_argument("--version", action="version", version="VideoCatchAI " + VERSION)
+    parser.add_argument("--data-dir", help="隔离设置目录；必须与正在运行的拾影 --data-dir 一致")
     parser.add_argument("action", nargs="?", choices=["capabilities", "state", "watch", "import", "download", "clip", "cancel",
         "capture_sources", "record_start", "record_pause", "record_resume", "record_stop", "record_state", "screenshot"])
     parser.add_argument("--pair", action="store_true", help="从剪贴板读取本次配对码并保存在本机设置中，不输出配对码")
     parser.add_argument("--json", default="{}", help="JSON 参数；也可用 --input 避免 shell 转义")
     parser.add_argument("--input", help="UTF-8 JSON 参数文件")
     args = parser.parse_args()
+    if args.data_dir:
+        os.environ["VIDEOCATCH_DATA_DIR"] = str(Path(args.data_dir).expanduser().resolve())
     try:
         config = settings_path()
         if args.pair:

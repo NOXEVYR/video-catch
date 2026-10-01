@@ -261,6 +261,38 @@ class NativeWidgetTests(unittest.TestCase):
         iconify.assert_not_called()
         self.app.start_recording.assert_called_once()
 
+    def test_async_recording_failure_restores_panel_and_error(self):
+        self.panel.vars["countdown"].set("立即开始")
+        self.panel.start()
+        self.app.recorder.is_busy = True
+        self.app.recorder.state = {"status": "准备录制"}
+        self.panel.refresh()
+        self.assertFalse(self.panel.visible)
+        self.app.recorder.is_busy = False
+        self.app.recorder.state = {"status": "失败", "error": "Synthetic camera unavailable"}
+        self.panel.refresh()
+        self.assertTrue(self.panel.visible)
+        self.assertIn("Synthetic camera", self.panel.detail.get())
+
+    def test_external_recording_does_not_reopen_hidden_panel(self):
+        self.panel.window.withdraw()
+        self.app.recorder.state = {"status": "已保存", "path": "fixture.mp4"}
+        self.panel.refresh()
+        self.assertFalse(self.panel.visible)
+
+    def test_recording_finish_during_exit_does_not_restore_windows(self):
+        self.panel.vars["countdown"].set("立即开始")
+        self.panel.start()
+        self.app.exit_after_capture = True
+        self.app.recorder.state = {"status": "已保存", "path": "fixture.mp4"}
+        with patch.object(self.root, "deiconify") as restore:
+            self.panel.refresh()
+        restore.assert_not_called()
+        self.assertFalse(self.panel.visible)
+        self.app.exit_after_capture = False
+        self.panel.refresh()
+        self.assertTrue(self.panel.visible)
+
     def test_small_window_keeps_footer_and_scrolls_settings(self):
         self.panel.window.minsize(660, 480)
         self.panel.window.geometry("780x610")

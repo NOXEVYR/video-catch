@@ -15,6 +15,8 @@ from pages import bili_page, youtube_page, video_page, observed_formats
 
 PORT = 18796
 MAX_ITEMS = 1000
+ONLINE_TIMEOUT = 95
+OFFLINE_RETENTION = 5 * 60
 
 
 def http_url(value):
@@ -59,14 +61,32 @@ class Store:
     def __init__(self):
         self.lock = threading.RLock()
         self.clients = {}
+        self.client_sessions = {}
         self.tabs = {}
         self.watching = set()
         self.items = {}
         self.paused = False
 
-    def sync(self, client, name, tabs):
+    def _expire(self, now):
+        expired = {client for client, last in self.clients.items() if now - last > OFFLINE_RETENTION}
+        for client in expired:
+            del self.clients[client]
+            self.client_sessions.pop(client, None)
+        for key in list(self.tabs):
+            if self.tabs[key]["client"] in expired:
+                del self.tabs[key]
+                self.watching.discard(key)
+
+    def _online(self, client, now=None):
+        last = self.clients.get(client)
+        return last is not None and (time.monotonic() if now is None else now) - last <= ONLINE_TIMEOUT
+
+    def sync(self, client, name, tabs, session=None):
         if not re.fullmatch(r"[a-zA-Z0-9_-]{8,80}", client):
             raise ValueError("无效的浏览器标识")
+        if session is not None and (not isinstance(session, str) or
+                                    not re.fullmatch(r"[a-zA-Z0-9_-]{16,80}", session)):
+            raise ValueError("无效的浏览器会话")
         if not isinstance(tabs, list) or len(tabs) > 1000:
             raise ValueError("标签页列表过大")
         current = {}
@@ -80,12 +100,22 @@ class Store:
             key = f"{client}:{tab['id']}"
             current[key] = {"key": key, "client": client, "tabId": tab["id"], "title": str(tab.get("title", "未命名页面"))[:300], "url": url, "browser": str(name)[:50]}
         with self.lock:
+            now = time.monotonic()
+            self._expire(now)
+            previous = self.clients.get(client)
+            same_session = self.client_sessions.get(client) == session
+            can_resume = previous is not None and same_session and (
+                now - previous <= ONLINE_TIMEOUT or session is not None)
             old = {k for k, t in self.tabs.items() if t["client"] == client}
             for key in old - current.keys():
                 self.tabs.pop(key, None)
                 self.watching.discard(key)
+            for key in old & current.keys():
+                if not can_resume or self.tabs[key]["url"] != current[key]["url"]:
+                    self.watching.discard(key)
             self.tabs.update(current)
-            self.clients[client] = time.monotonic()
+            self.clients[client] = now
+            self.client_sessions[client] = session
             for key in current:
                 if key in self.watching and not self.paused and video_page(current[key]["url"]):
                     self.add_page({"client": client, "tabId": current[key]["tabId"], "url": current[key]["url"]})
@@ -94,15 +124,18 @@ class Store:
 
     def snapshot(self):
         with self.lock:
-            expired = {c for c, last in self.clients.items() if time.monotonic() - last > 95}
-            for c in expired:
-                del self.clients[c]
-            for key in list(self.tabs):
-                if self.tabs[key]["client"] in expired:
-                    del self.tabs[key]
-                    self.watching.discard(key)
-            return ([dict(t, watching=k in self.watching) for k, t in self.tabs.items()],
-                    [dict(v) for v in self.items.values()], len(self.clients))
+            now = time.monotonic()
+            self._expire(now)
+            tabs = []
+            for key, tab in self.tabs.items():
+                online = self._online(tab["client"], now)
+                watching = key in self.watching
+                browser = tab["browser"]
+                if not online:
+                    browser = "离线 · " + browser + ("（重连可恢复监听）" if watching else "")
+                tabs.append(dict(tab, browser=browser, watching=watching, online=online,
+                                 offline_seconds=0 if online else int(now - self.clients[tab["client"]])))
+            return tabs, [dict(v) for v in self.items.values()], sum(self._online(c, now) for c in self.clients)
 
     def toggle(self, keys):
         with self.lock:
@@ -122,7 +155,7 @@ class Store:
         with self.lock:
             key = f"{data.get('client', '')}:{data.get('tabId', -1)}"
             tab = self.tabs.get(key)
-            if not tab or key not in self.watching or self.paused:
+            if not tab or key not in self.watching or self.paused or not self._online(tab["client"]):
                 return {"ok": True, "added": False}
             page = http_url(data.get("url", ""))
             current = video_page(tab["url"]) or tab["url"].split("#")[0]
@@ -134,7 +167,9 @@ class Store:
             if "id" not in result:
                 return result
             item = self.items[result["id"]]
-            item["title"] = tab["title"]
+            # Extension heartbeats rediscover watched pages. Keep an explicit
+            # user display name across that refresh, including format upgrades.
+            item["title"] = item.get("display_name") or tab["title"]
             item["kind"] = item.get("kind") if item.get("formats") else ("B站页面解析" if bili_page(page) else "YouTube 解析" if youtube_page(page) else "网页视频解析")
             formats = observed_formats(data.get("formats", [])) if bili_page(page) else []
             if formats:
@@ -158,13 +193,15 @@ class Store:
             return {"ok": True, "added": False}
         with self.lock:
             key = f"{data.get('client', '')}:{data.get('tabId', -1)}"
-            if not manual and (self.paused or key not in self.watching or key not in self.tabs):
+            if not manual and (self.paused or key not in self.watching or key not in self.tabs or
+                               not self._online(data.get("client", ""))):
                 return {"ok": True, "added": False}
             ident = hashlib.sha256((key + "\n" + url).encode()).hexdigest()[:20]
             if ident in self.items:
-                self.items[ident]["headers"].update(safe_headers(data.get("headers", {})))
-                return {"ok": True, "added": False, "id": ident}
-            if len(self.items) >= MAX_ITEMS:
+                if not self.items[ident].get("history"):
+                    self.items[ident]["headers"].update(safe_headers(data.get("headers", {})))
+                    return {"ok": True, "added": False, "id": ident}
+            if ident not in self.items and len(self.items) >= MAX_ITEMS:
                 return {"ok": True, "added": False, "full": True}
             tab = self.tabs.get(key, {})
             self.items[ident] = {"id": ident, "url": url, "title": str(data.get("title") or tab.get("title") or display_host(url))[:300],
@@ -247,7 +284,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(exc.status, {"error": exc.message})
                     return
             elif self.path == "/sync":
-                result = self.server.store.sync(str(data.get("client", "")), data.get("name", "浏览器"), data.get("tabs", []))
+                result = self.server.store.sync(str(data.get("client", "")), data.get("name", "浏览器"),
+                                                data.get("tabs", []), data.get("session"))
             elif self.path == "/media":
                 if not isinstance(data.get("headers", {}), dict):
                     raise ValueError("无效请求头")

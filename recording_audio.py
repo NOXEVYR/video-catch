@@ -68,12 +68,17 @@ def _write_timed_audio(output, timing, data, count, info, now):
     if timing["started"] is None:
         timing["started"] = now - count / rate
         timing["adc_anchor"] = adc if valid_adc else None
-    if valid_adc and timing.get("adc_anchor") is not None and adc >= timing["adc_anchor"]:
+    reliable_adc = valid_adc and timing.get("adc_anchor") is not None and adc >= timing["adc_anchor"]
+    if reliable_adc:
         expected = round((adc - timing["adc_anchor"]) * rate)
     else:
         expected = round((now - timing["started"]) * rate) - count
     gap = expected - timing["frames"]
-    if gap > rate // 10:
+    # Device ADC timestamps mark the captured samples' positions, so even a
+    # short missing interval must be retained. Callback arrival times can
+    # jitter without dropped samples; keep their larger fallback threshold.
+    tolerance = max(1, round(rate / 1000)) if reliable_adc else rate // 10
+    if gap > tolerance:
         while gap > 0:
             amount = min(gap, rate)
             output.writeframesraw(bytes(amount * timing["channels"] * 2))
@@ -156,6 +161,10 @@ def _audio_worker(options, folder, stop, messages):
         messages.put({"tracks": tracks})
 
 
+class AudioCaptureCancelled(RuntimeError):
+    """The caller stopped before the audio capture became ready."""
+
+
 class AudioCapture:
     """Bounded process lifecycle; call only on the recording worker thread."""
     def __init__(self, options, folder):
@@ -177,7 +186,7 @@ class AudioCapture:
         while time.monotonic() < deadline:
             if cancelled and cancelled():
                 self.stop()
-                raise RuntimeError("录制准备已停止")
+                raise AudioCaptureCancelled("录制准备已停止")
             try:
                 message = self._messages.get(timeout=.1)
             except queue.Empty:
