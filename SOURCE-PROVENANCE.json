@@ -1,9 +1,19 @@
 {
   "repository": "https://github.com/NOXEVYR/video-catch",
-  "base_source_archive_sha256": "5be0181e748ef77104f8f64582375d653b5bb481577835aa81b8bef42039f377",
-  "original_release_sha256": "796eb2831f2871b129a3cc708c352323fdc7d5a10def553feb6bec0313cc5024",
-  "changes": "Local rc3: saved video card library, both sash grips hidden, Windows system tray; preserves rc2 AI, frame editor, copy drag and lifecycle fixes. Software updater is experimental source only, not integrated.",
-  "version": "0.5.1-rc.3",
-  "base_source_commit": "d49cc14f282d6b342b7bd8fc312ea9d5d5b3dd78",
-  "build_source_commit": "Local working tree; source diff delivered with local build"
+  "version": "0.6.0-rc.8",
+  "release_type": "Windows prerelease",
+  "base_source_commit": "33400a09895c066e54c508d22cd019134903c238",
+  "reconstructed_build_source_commit": "80829f78fee2c5acea0cf5eb7d5aa34ca48afd78",
+  "original_manifest_source_commit": "source-archive-with-local-changes",
+  "original_source_dirty": true,
+  "source_tree_sha256": "416d040bf62a2035dab3ed72cd26bb55b4d3beb6192244ea9ea32f7e01bdc30c",
+  "source_files": 157,
+  "windows_archive_sha256": "e6bc1d3c855bf8910361e70d8ebbb3d819dd737f30de127f145e1138f52055a1",
+  "built_from_reconstructed_git_commit": false,
+  "relationship": "The reconstructed snapshot preserves exact build-input bytes. The release tag adds publication documents and generated screenshots; the tested Windows archive is unchanged.",
+  "bundled_documentation": "Original ZIP retains candidate documents and stale legacy provenance text; consult public release documents.",
+  "platforms_published": [
+    "Windows-x64"
+  ],
+  "stable_release_preserved": "v0.5.0"
 }
